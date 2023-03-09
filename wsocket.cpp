@@ -11,9 +11,28 @@
 #include <fstream>
 #include <map>
 #include <sstream>
-#include "b64_enc.cpp"
+#include "SHA1.h"
+#include "base64.hpp"
 
-#define PORT 8051
+using namespace std;
+
+#define PORT 8023
+
+std::string response_ws(string base64, string GUID) {
+    string sec = base64+GUID;
+    SHA1 sh;
+    sh.update(sec);
+
+    unsigned char* buf = sh.final();
+
+    string digest;
+
+    for(int i = 0; i < 20; i++) {
+        digest.push_back(buf[i]);
+    }
+
+    return base64::to_base64(digest);
+}
 
 typedef unsigned char byte;
 typedef unsigned int  uint;
@@ -25,12 +44,10 @@ public:
 		headers = headers.substr(headers.find('\n')+1);
 
 		// parsa os headers
-		while(headers.find('\n') != std::string::npos) {
-			std::string cur_line        = headers.substr(0, headers.find('\n'));
+		while(headers.size() > 3 && headers.find('\n') != std::string::npos) {
+			std::string cur_line        = headers.substr(0, headers.find('\n')-1);
 			std::string cur_header_type = cur_line.substr(0, cur_line.find(':'));
 			std::string cur_header_info = cur_line.substr(cur_line.find(':')+2);
-
-			//std::cout << cur_header_type << " " << cur_header_info << std::endl;
 
 			this->hd[cur_header_type] 	= cur_header_info;
 			headers 	    			= headers.substr(headers.find('\n')+1);
@@ -38,11 +55,10 @@ public:
 	}
 
 	std::string get_response_header() {
-		string res_header = "HTTP/1.1 101 Switching Protocols\n"
-        "Upgrade: websocket\n"
-        "Connection: Upgrade\n"
-        "Sec-WebSocket-Accept: ";
-		res_header += this->get_security_check() + "\n\n";
+		string res_header = "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: WebSocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: " + this->get_security_check() + "\r\n\r\n";
 		return res_header;
 	}
 
@@ -60,65 +76,31 @@ private:
 
 void client_handle(int fd) {
     std::cout << "cliente conectado" << std::endl;
-	
-	char buf[1024];
-	int len = recv(fd, buf, 1024, 0);
 
-	//cout << buf << endl << endl << endl;
+	unsigned char buf[2024];
+	int len = recv(fd, buf, 2024, 0);
 
-	handshake_handler hs(buf);
+	handshake_handler hs((char*)buf);
 
 	string res = hs.get_response_header();
 
-	std::cout << res.data() << std::endl;
-
+	// tratar isso aqui dps.. while sendBytes > 0 ..
 	send(fd, res.data(), res.size(), 0);
 
-	// cout << "enviados: " << send(fd, res.data(), res.size(), 0) << " bytes" << std::endl;
-
-	// while(1) {
-	// 	cout << "teste" << endl;
-	// 	sleep(1);
-	// 	system("clear");
-	// 	send(fd, res.data(), res.size(), 0);
-	// 	cout << res.data() << endl;
-	// }
-
-	//std::cout << buf << std::endl << std::endl;
-
     for(;;) {
-        char buf[1024];
+        unsigned char buf[1024];
         int len = recv(fd, buf, 1024, 0);
 
-		//std::cout << len << std::endl;
+		if(len > 0) {
+			for(int i = 0; i < len; i++) {
+				printf("%d ", buf[i]);
+			}
+			printf("\n");
+		}
 
         //std::cout << "teste" << std::endl << std::endl;
     }
 }
-
-// int mainx() {
-// 	std::string t = "GET ws://127.0.0.1:8080/ HTTP/1.1\
-// \nHost: 127.0.0.1:8080\
-// \nConnection: Upgrade\
-// \nPragma: no-cache\
-// \nCache-Control: no-cache\
-// \nUser-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36\
-// \nUpgrade: websocket\
-// \nOrigin: http://127.0.0.1:5500\
-// \nSec-WebSocket-Version: 13\
-// \nAccept-Encoding: gzip, deflate, br\
-// \nAccept-Language: pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6,zh;q=0.5\
-// \nSec-WebSocket-Key: mxnaTS4AD0VXItpa8MtW2w==\
-// \nSec-WebSocket-Extensions: permessage-deflate; client_max_window_bits";
-
-// 	//cout << t << endl;
-
-// 	handshake_handler hh(t);
-
-// 	std::cout << hh.get_response_header() << std::endl;
-
-// 	return 0;
-// }
 
 int main(int argc, char const* argv[]) {
 	int server_fd, client_fd;
