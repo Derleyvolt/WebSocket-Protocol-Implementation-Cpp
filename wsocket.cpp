@@ -18,10 +18,10 @@ using namespace std;
 
 #define PORT 8023
 
-std::string response_ws(string base64, string GUID) {
-    string sec = base64+GUID;
+std::string genAcceptHeader(string base64, string GUID) {
     SHA1 sh;
-    sh.update(sec);
+
+    sh.update(base64+GUID);
 
     unsigned char* buf = sh.final();
 
@@ -49,56 +49,259 @@ public:
 			std::string cur_header_type = cur_line.substr(0, cur_line.find(':'));
 			std::string cur_header_info = cur_line.substr(cur_line.find(':')+2);
 
-			this->hd[cur_header_type] 	= cur_header_info;
-			headers 	    			= headers.substr(headers.find('\n')+1);
+			this->header[cur_header_type] 	= cur_header_info;
+			headers 	    			    = headers.substr(headers.find('\n')+1);
 		}
 	}
 
-	std::string get_response_header() {
+	std::string getResponseHeader() {
 		string res_header = "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: WebSocket\r\n"
         "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: " + this->get_security_check() + "\r\n\r\n";
+        "Sec-WebSocket-Accept: " + this->getSecurityCheck() + "\r\n\r\n";
 		return res_header;
 	}
 
-	std::string get_header(std::string header) {
-		return hd[header];
+	std::string getHeader(std::string h) {
+		return header[h];
 	}
 
 private:
-	std::map<std::string, std::string> hd;
+	std::map<std::string, std::string> header;
 
-	std::string get_security_check() {
-		return response_ws(this->hd["Sec-WebSocket-Key"], "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+	std::string getSecurityCheck() {
+		return genAcceptHeader(this->header["Sec-WebSocket-Key"], "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
 	}
 };
 
-void client_handle(int fd) {
-    std::cout << "cliente conectado" << std::endl;
+void showBits(unsigned short n) {
+	if(n <= 0) {
+		return;
+	}
 
-	unsigned char buf[2024];
-	int len = recv(fd, buf, 2024, 0);
+	showBits(n>>1);
+	printf("%d", (n&1));
+}
 
-	handshake_handler hs((char*)buf);
+class PartialHeader {
+public:
+	unsigned char  opcode;
+	unsigned char  isMask;
+	unsigned char  payloadType;
+	unsigned char  FIN;
+	unsigned int   appDataLen;
+	unsigned char  mask[4];
+	unsigned int   headerLen;
+	unsigned char  maskAddrOffset;
 
-	string res = hs.get_response_header();
+	void extractOpcode(vector<unsigned char>& buf) {
+		this->opcode = buf[0] & 0xF;
+	}
 
-	// tratar isso aqui dps.. while sendBytes > 0 ..
-	send(fd, res.data(), res.size(), 0);
+	void extractMaskEnabled(vector<unsigned char>& buf) {
+		this->isMask = !!(buf[1] & 0x80);
+	}
 
-    for(;;) {
-        unsigned char buf[1024];
-        int len = recv(fd, buf, 1024, 0);
+	void extractPayloadType(vector<unsigned char>& buf) {
+		int type = buf[1] & 0x7F;
 
-		if(len > 0) {
-			for(int i = 0; i < len; i++) {
-				printf("%d ", buf[i]);
-			}
-			printf("\n");
+		if(type < 126) {
+			maskAddrOffset = 2;
+			payloadType = type;
+		} else if(type == 126) {
+			maskAddrOffset = 4;
+			payloadType = type;
+		} else {
+			maskAddrOffset = 10;
+			payloadType = type;
+		}
+	}
+
+	void extractFIN(vector<unsigned char>& buf) {
+		this->FIN = buf[0] & 0x80 >> 7;
+	}
+
+public:
+	int getOffsetToSecondStage() const {	
+		return this->maskAddrOffset + 2;
+	}
+
+	void extractFirstStage(vector<unsigned char>& buf) {
+		extractOpcode(buf);
+		extractMaskEnabled(buf);
+		extractPayloadType(buf);
+		extractFIN(buf);
+
+		headerLen = 2 + isMask * 4 + (this->payloadType < 126 ? 0 : this->payloadType == 126 ? 2 : 8);
+	}
+
+	void extractSecondStage(vector<unsigned char>& buf) {
+		// read application data length
+		if(payloadType < 126) {
+			this->appDataLen = buf[1] & 0x7F;
+		} else if(payloadType == 126) {
+			ushort byteOrder  = *(ushort*)(buf.data()+2);
+			this->appDataLen  = 0xFFFF & ((byteOrder >> 8) | (byteOrder << 8));
+		} else {
+			this->appDataLen = 'TRATAR O ENDIANESS';
 		}
 
-        //std::cout << "teste" << std::endl << std::endl;
+		memcpy(&this->mask, &buf[maskAddrOffset], 4);
+	}
+
+	int getPayloadType() {
+		return this->payloadType;
+	}
+};
+
+void readNBytes(int fd, vector<unsigned char>& buf, int until) {
+	buf.assign(until, 0);
+
+	int readBytes = 0;
+
+	while(readBytes < until) {
+		readBytes += recv(fd, buf.data()+readBytes, until-readBytes, 0);
+	}
+}
+
+void printHeader(PartialHeader h) {
+	printf("opcode: %d\n",     h.opcode);
+	printf("mask: %d\n",       h.isMask);
+	printf("headerLen: %d\n", h.headerLen);
+	printf("appDataLen: %d\n", h.appDataLen);
+	printf("FIN: %d\n\n",      h.FIN);
+}
+
+// buf precisa ser do tamanho exato do pacote
+void parseHeader(int fd, vector<unsigned char>& buf) {
+	PartialHeader header;
+
+	header.extractFirstStage(buf);
+
+	printHeader(header);
+
+	vector<unsigned char> bufTemp;
+
+	cout << "getOffsetToSecondStage: " << header.getOffsetToSecondStage() << endl;
+
+	cout << "buf: " << buf.size() << endl;
+
+	int x = buf.size();
+
+	if(x - (header.appDataLen + header.headerLen) < 0) {
+		cout << "teste" << endl;
+		exit(0);
+		readNBytes(fd, bufTemp, header.appDataLen + header.headerLen - buf.size());
+	}
+
+	cout << "tamanho: " << bufTemp.size() << endl;
+
+	for_each(bufTemp.begin(), bufTemp.end(), [&buf](unsigned char e) {
+		buf.push_back(e);
+	});
+
+	header.extractSecondStage(buf);
+
+	printHeader(header);
+
+	buf.erase(buf.begin(), buf.begin()+header.headerLen+header.appDataLen);
+
+	cout << buf.size() << endl;
+
+	// h.opcode	 = buf[0] & 0xF;
+	// h.isMask     = buf[1] & 0x80;
+	// h.length     = buf[1] & 0x7F;
+	// h.FIN 		 = buf[0] & 0x80 >> 7;
+	// h.headerLen  = 2 + (!!h.isMask) * 4 + h.length == 126 ? 2 : 8;
+
+	// if(h.length < 126) {
+	// 	h.payloadLen = h.length;
+	// 	h.payLoadBuffer.resize(h.length);
+	// 	printf("mask\n");
+	// 	printf("%d %d %d %d\n", buf[2], buf[3], buf[4], buf[5]);
+	// 	memcpy(&h.mask, &buf[2], 4);
+	// } else if(h.length == 126) {
+	// 	ushort byteOrder = *(ushort*)(&buf[2]);
+	// 	h.payloadLen     = 0xFFFF & ((byteOrder >> 8) | (byteOrder << 8));
+	// 	printf("%d %d %d %d\n", buf[4], buf[5], buf[6], buf[7]);
+	// 	memcpy(&h.mask, &buf[4], 4);
+	// } else if(h.length == 127) {
+	// 	memcpy(&h.payloadLen, buf.data()+2, 8);
+	// 	memcpy(&h.mask, &buf[10], 4);
+	// }
+  
+	// if(h.isMask) {
+	// 	if(h.payloadLen < 126) {
+	// 		memcpy(&h.mask, &buf[2], 4);
+	// 	} else if(h.payloadLen == 126) {
+	// 		memcpy(&h.mask, &buf[4], 4);
+	// 	} else {
+	// 		memcpy(&h.mask, &buf[10], 4);
+	// 	}
+	// }
+
+	// h.payLoadBuffer.resize(h.payloadLen);
+	// memcpy(h.payLoadBuffer.data(), &buf[h.length < 126 ? 6 : 8], h.payloadLen);
+
+	// printf("buffer\n");
+
+	// for(int i = 0; i < h.payLoadBuffer.size(); i++) {
+	// 	cout << (char)(h.payLoadBuffer[i] ^ h.mask[i%4]) << " ";
+	// }
+
+	// cout << endl;
+	// return h;
+}
+
+void clientHandler(int fd) {
+    std::cout << "cliente conectado" << std::endl;
+
+	unsigned char rawBuf[8192];
+	int len = recv(fd, rawBuf, 8192, 0);
+
+	string response = handshake_handler((char*)rawBuf).getResponseHeader();
+
+	// tratar isso aqui dps.. while sendBytes > 0 ..
+	send(fd, response.data(), response.size(), 0);
+
+	vector<unsigned char> buf;
+
+    for(;;) {
+        len = recv(fd, rawBuf, 8192, 0);
+		
+		for_each(begin(rawBuf), begin(rawBuf)+len, [&buf](unsigned char e) {
+			buf.push_back(e);
+		});
+
+		if(len) {
+			printf("LEN : %d\n\n", len);
+			parseHeader(fd, buf);
+		}
+
+		// unsigned char opcode     = 0;
+		// unsigned char FIN        = 0;
+		// unsigned char payLoadLen = 0;
+		// unsigned char mask       = 0;
+		// if(len) {
+		// 	FIN    	   = (buf[0] & 0x80) >> 7;
+		// 	opcode     = buf[0]  & 0xF;
+		// 	payLoadLen = buf[1]  & 0x7F;
+		// 	mask       = buf[1]  & 0x80;
+		// 	printf("mask: %d\n", mask);
+		// 	printf("payLoadLen: %d\n", payLoadLen);
+		// 	printf("opcode: ");
+		// 	showBits(opcode);
+		// 	printf("\n");
+		// 	printf("FIN: %d\n\n", FIN);
+		// 	showBits(buf[1]);
+		// 	printf("\n");
+		// }
+		// if(len > 0) {
+		// 	for(int i = 0; i < len; i++) {
+		// 		printf("%d ", buf[i]);
+		// 	}
+		// 	printf("\n");
+		// }
     }
 }
 
@@ -147,7 +350,7 @@ int main(int argc, char const* argv[]) {
             std::cout << "Erro na funcao accept" << std::endl;
         }
 
-        std::thread tclient(client_handle, client_fd);
+        std::thread tclient(clientHandler, client_fd);
         tclient.detach();
     }
 
