@@ -188,7 +188,8 @@ void parseHeader(int fd, vector<unsigned char>& buf) {
 
     // Tratando o caso onde recebo apenas um pedaço do header mas não ele completamente
 	if(buf.size() < 14) {
-        int restBytes = x-header.headerLen;
+        int len       = buf.size();
+        int restBytes = len-header.headerLen;
 
         if(header.payloadType < 126 && restBytes < 4) {
             readNBytes(fd, bufTemp, 4);    
