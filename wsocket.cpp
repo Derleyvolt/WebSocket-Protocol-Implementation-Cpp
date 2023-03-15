@@ -186,12 +186,17 @@ void parseHeader(int fd, vector<unsigned char>& buf) {
 
 	cout << "buf: " << buf.size() << endl;
 
-	int x = buf.size();
+    // Tratando o caso onde recebo apenas um pedaço do header mas não ele completamente
+	if(buf.size() < 14) {
+        int restBytes = x-header.headerLen;
 
-	if(x - (header.appDataLen + header.headerLen) < 0) {
-		cout << "teste" << endl;
-		exit(0);
-		readNBytes(fd, bufTemp, header.appDataLen + header.headerLen - buf.size());
+        if(header.payloadType < 126 && restBytes < 4) {
+            readNBytes(fd, bufTemp, 4);    
+        } else if(header.payloadType == 126 && restBytes < 6) {
+            readNBytes(fd, bufTemp, 6);
+        } else {
+            readNBytes(fd, bufTemp, 12);
+        }
 	}
 
 	cout << "tamanho: " << bufTemp.size() << endl;
