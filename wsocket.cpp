@@ -74,25 +74,17 @@ private:
 	}
 };
 
-void showBits(unsigned short n) {
-	if(n <= 0) {
-		return;
-	}
-
-	showBits(n>>1);
-	printf("%d", (n&1));
-}
-
 class PartialHeader {
 public:
-	unsigned char  opcode;
-	unsigned char  isMask;
-	unsigned char  payloadType;
-	unsigned char  FIN;
-	unsigned int   appDataLen;
-	unsigned char  mask[4];
-	unsigned int   headerLen;
-	unsigned char  maskAddrOffset;
+	unsigned char     opcode;          // opcode..
+	bool  		      isMask;          // máscara
+	unsigned char     payloadType;     // tipo referente ao tamanho do dado da aplicação
+	unsigned char     FIN;             // usado pra verificar se existem múltiplos frames referente a um mesmo dado
+	unsigned long int appDataLen = 0;  // tamanho do dado da aplicação
+	unsigned char  	  mask[4];         // máscara
+	unsigned int   	  headerLen;       // tamanho do header
+	unsigned char  	  maskAddrOffset;  // offset do inicio da máscara nos bytes
+	unsigned char  	  appDataLenBytes; // contém a quantidade de bytes necessários que guardará o tamanho do dado da aplicação
 
 	void extractOpcode(vector<unsigned char>& buf) {
 		this->opcode = buf[0] & 0xF;
@@ -107,32 +99,28 @@ public:
 
 		if(type < 126) {
 			maskAddrOffset = 2;
-			payloadType = type;
 		} else if(type == 126) {
 			maskAddrOffset = 4;
-			payloadType = type;
 		} else {
 			maskAddrOffset = 10;
-			payloadType = type;
 		}
+
+		payloadType = type;
 	}
 
 	void extractFIN(vector<unsigned char>& buf) {
-		this->FIN = buf[0] & 0x80 >> 7;
+		this->FIN = (buf[0] & 0x80) >> 7;
 	}
 
 public:
-	int getOffsetToSecondStage() const {	
-		return this->maskAddrOffset + 2;
-	}
-
 	void extractFirstStage(vector<unsigned char>& buf) {
 		extractOpcode(buf);
 		extractMaskEnabled(buf);
 		extractPayloadType(buf);
 		extractFIN(buf);
 
-		headerLen = 2 + isMask * 4 + (this->payloadType < 126 ? 0 : this->payloadType == 126 ? 2 : 8);
+		headerLen 		= 2 + isMask * 4 + (this->payloadType < 126 ? 0 : this->payloadType == 126 ? 2 : 8);
+		appDataLenBytes = payloadType < 126 ? 0 : payloadType == 126 ? 2 : 8;
 	}
 
 	void extractSecondStage(vector<unsigned char>& buf) {
@@ -143,7 +131,12 @@ public:
 			ushort byteOrder  = *(ushort*)(buf.data()+2);
 			this->appDataLen  = 0xFFFF & ((byteOrder >> 8) | (byteOrder << 8));
 		} else {
-			this->appDataLen = 'TRATAR O ENDIANESS';
+			unsigned long byteOrder;
+			memcpy(&byteOrder, buf.data()+2, this->appDataLenBytes);
+			// big endian to little endian
+			for(int i = 0; i < 8; i++) {
+				this->appDataLen |= (0xFFFFFFFFFFFFFFFF >> 8*i) & (byteOrder >> (8*i) << (8*(7-i)));
+			}
 		}
 
 		memcpy(&this->mask, &buf[maskAddrOffset], 4);
@@ -165,98 +158,95 @@ void readNBytes(int fd, vector<unsigned char>& buf, int until) {
 }
 
 void printHeader(PartialHeader h) {
-	printf("opcode: %d\n",     h.opcode);
-	printf("mask: %d\n",       h.isMask);
-	printf("headerLen: %d\n", h.headerLen);
-	printf("appDataLen: %d\n", h.appDataLen);
-	printf("FIN: %d\n\n",      h.FIN);
+	printf("opcode: %d\n",        h.opcode);
+	printf("headerLen: %d\n",     h.headerLen);
+	printf("appDataLen: %lu \n",  h.appDataLen);
+	printf("FIN: %d \n",          h.FIN);
 }
 
 // buf precisa ser do tamanho exato do pacote
-void parseHeader(int fd, vector<unsigned char>& buf) {
+pair<vector<unsigned char>, bool> parsePacket(int fd, vector<unsigned char>& buf) {
 	PartialHeader header;
+
+	int bufLen = buf.size();
+
+	// tamanho minimo de um pacote no protocolo
+	if(bufLen < 2) {
+		readNBytes(fd, buf, 2-bufLen);
+	}
 
 	header.extractFirstStage(buf);
 
-	printHeader(header);
-
 	vector<unsigned char> bufTemp;
 
-	cout << "getOffsetToSecondStage: " << header.getOffsetToSecondStage() << endl;
-
-	cout << "buf: " << buf.size() << endl;
-
     // Tratando o caso onde recebo apenas um pedaço do header mas não ele completamente
-	if(buf.size() < 14) {
-        int len       = buf.size();
-        int restBytes = len-header.headerLen;
+	if(header.payloadType > 0) {
+        int restBytes = bufLen-2;
 
-        if(header.payloadType < 126 && restBytes < 4) {
-            readNBytes(fd, bufTemp, 4);    
-        } else if(header.payloadType == 126 && restBytes < 6) {
-            readNBytes(fd, bufTemp, 6);
-        } else {
-            readNBytes(fd, bufTemp, 12);
-        }
+		// verifico se tenho algum dado pra receber
+		if(restBytes < 4) {
+			int data = header.isMask * 4 + header.appDataLenBytes;
+
+			if(header.payloadType < 126) {
+				readNBytes(fd, bufTemp, data-restBytes);
+			} else if(header.payloadType == 126) {
+				readNBytes(fd, bufTemp, data-restBytes);
+			} else {
+				readNBytes(fd, bufTemp, data-restBytes);
+			}
+
+			for_each(bufTemp.begin(), bufTemp.end(), [&buf](unsigned char e) {
+				buf.push_back(e);
+			});
+		}
 	}
-
-	cout << "tamanho: " << bufTemp.size() << endl;
-
-	for_each(bufTemp.begin(), bufTemp.end(), [&buf](unsigned char e) {
-		buf.push_back(e);
-	});
 
 	header.extractSecondStage(buf);
 
-	printHeader(header);
+	bufLen = buf.size();
+
+	if(bufLen < header.appDataLen+header.headerLen) {
+		readNBytes(fd, bufTemp, (header.appDataLen+header.headerLen)-bufLen);
+
+		for_each(bufTemp.begin(), bufTemp.end(), [&buf](unsigned char e) {
+			buf.push_back(e);
+		});
+	}
 
 	buf.erase(buf.begin(), buf.begin()+header.headerLen+header.appDataLen);
 
-	cout << buf.size() << endl;
+	vector<unsigned char> data(header.appDataLen);
 
-	// h.opcode	 = buf[0] & 0xF;
-	// h.isMask     = buf[1] & 0x80;
-	// h.length     = buf[1] & 0x7F;
-	// h.FIN 		 = buf[0] & 0x80 >> 7;
-	// h.headerLen  = 2 + (!!h.isMask) * 4 + h.length == 126 ? 2 : 8;
+	for(int i = 0; i < data.size(); i++) {
+		data[i] = buf[header.headerLen+i] ^ header.mask[i%4];
+	}
 
-	// if(h.length < 126) {
-	// 	h.payloadLen = h.length;
-	// 	h.payLoadBuffer.resize(h.length);
-	// 	printf("mask\n");
-	// 	printf("%d %d %d %d\n", buf[2], buf[3], buf[4], buf[5]);
-	// 	memcpy(&h.mask, &buf[2], 4);
-	// } else if(h.length == 126) {
-	// 	ushort byteOrder = *(ushort*)(&buf[2]);
-	// 	h.payloadLen     = 0xFFFF & ((byteOrder >> 8) | (byteOrder << 8));
-	// 	printf("%d %d %d %d\n", buf[4], buf[5], buf[6], buf[7]);
-	// 	memcpy(&h.mask, &buf[4], 4);
-	// } else if(h.length == 127) {
-	// 	memcpy(&h.payloadLen, buf.data()+2, 8);
-	// 	memcpy(&h.mask, &buf[10], 4);
-	// }
-  
-	// if(h.isMask) {
-	// 	if(h.payloadLen < 126) {
-	// 		memcpy(&h.mask, &buf[2], 4);
-	// 	} else if(h.payloadLen == 126) {
-	// 		memcpy(&h.mask, &buf[4], 4);
-	// 	} else {
-	// 		memcpy(&h.mask, &buf[10], 4);
-	// 	}
-	// }
+	return { data, header.FIN };
+}
 
-	// h.payLoadBuffer.resize(h.payloadLen);
-	// memcpy(h.payLoadBuffer.data(), &buf[h.length < 126 ? 6 : 8], h.payloadLen);
+void sendAll(int fd, unsigned char* buf, size_t n) {
+	unsigned int sent = 0;
+	while(n-sent > 0) {
+		sent += send(fd, buf+sent, n-sent, 0);
+	}
+}
 
-	// printf("buffer\n");
+vector<unsigned char> assemblyFrames(int fd, vector<unsigned char>& buf) {
+	vector<unsigned char> result;
 
-	// for(int i = 0; i < h.payLoadBuffer.size(); i++) {
-	// 	cout << (char)(h.payLoadBuffer[i] ^ h.mask[i%4]) << " ";
-	// }
+	pair<vector<unsigned char>, bool> res;
 
-	// cout << endl;
-	// return h;
+	do {
+		res      = parsePacket(fd, buf);
+		auto aux = res.first;
+
+		for_each(aux.begin(), aux.end(), [&result](unsigned char e) {
+			result.push_back(e);
+		});
+		
+	} while(!res.second);
+
+	return result;
 }
 
 void clientHandler(int fd) {
@@ -267,8 +257,7 @@ void clientHandler(int fd) {
 
 	string response = handshake_handler((char*)rawBuf).getResponseHeader();
 
-	// tratar isso aqui dps.. while sendBytes > 0 ..
-	send(fd, response.data(), response.size(), 0);
+	sendAll(fd, (unsigned char*)response.data(), response.size());
 
 	vector<unsigned char> buf;
 
@@ -281,33 +270,15 @@ void clientHandler(int fd) {
 
 		if(len) {
 			printf("LEN : %d\n\n", len);
-			parseHeader(fd, buf);
-		}
+			auto data = assemblyFrames(fd, buf);
 
-		// unsigned char opcode     = 0;
-		// unsigned char FIN        = 0;
-		// unsigned char payLoadLen = 0;
-		// unsigned char mask       = 0;
-		// if(len) {
-		// 	FIN    	   = (buf[0] & 0x80) >> 7;
-		// 	opcode     = buf[0]  & 0xF;
-		// 	payLoadLen = buf[1]  & 0x7F;
-		// 	mask       = buf[1]  & 0x80;
-		// 	printf("mask: %d\n", mask);
-		// 	printf("payLoadLen: %d\n", payLoadLen);
-		// 	printf("opcode: ");
-		// 	showBits(opcode);
-		// 	printf("\n");
-		// 	printf("FIN: %d\n\n", FIN);
-		// 	showBits(buf[1]);
-		// 	printf("\n");
-		// }
-		// if(len > 0) {
-		// 	for(int i = 0; i < len; i++) {
-		// 		printf("%d ", buf[i]);
-		// 	}
-		// 	printf("\n");
-		// }
+			unsigned long res = 0;
+			for(auto e : data) {
+				res += e;
+			}
+
+			cout << "res: " << res << endl;
+		}
     }
 }
 
