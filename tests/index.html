@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <title>Document</title>
+</head>
+<body>
+    
+    <h1 class="texto">  </h1>
+
+    <div class="form">
+        <label> Digite uma mensagem </label>
+        <input class="campo1" type="text">
+        <button class="btn1"> Enviar </button>
+        <br><br>
+        <label id="lb"> 0 </label>
+    </div>
+    
+    <script>
+        let socket = new WebSocket("ws://127.0.0.1:8023");
+
+        console.log(socket.readyState)
+
+        socket.onopen = function(e) {
+            // console.log("teste");
+            // socket.send("Hello World");
+        };
+
+        const generateRandomSequence = (tam) => {
+            let aBuffer = new ArrayBuffer(tam);
+            let res     = new Uint8Array(aBuffer);
+            
+            for(var i = 0; i < tam; i++) {
+                res[i] = 0xFF & (Math.floor(Math.random() * 1000000));
+            }
+
+            return res;
+        }
+
+        $('.btn1').on('click', () => {
+            // let tam = Number($('.campo1').val());
+
+            // let res = generateRandomSequence(tam);
+
+            let obj = 
+            [   {   "Name": "Jonh",
+                    "Age": 34,
+                    "StateOfOrigin": "England",
+                    "Pets": [
+                        {
+                            "Type": "Cat",
+                            "Name": "MooMoo",
+                            "Age": 3.4
+                        }, 
+                        {
+                            "Type": "Squirrel",
+                            "Name": "Sandy",
+                            "Age": 7
+                        }
+                    ]
+                }
+            ]
+
+            socket.send(JSON.stringify(obj));
+
+            // res = res.reduce((prev, cur) => {
+            //     return prev + cur;
+            // });
+
+            // document.getElementById("lb").innerHTML = res;
+        })
+
+        socket.onmessage = function(event) {
+            $('.texto').val(event.data);
+            alert(`[message] Data received from server: ${event.data}`);
+        };
+    </script>
+</body>
+</html>
