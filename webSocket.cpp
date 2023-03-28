@@ -23,7 +23,7 @@ std::string genAcceptHeader(string base64, string GUID) {
 
     sh.update(base64+GUID);
 
-    unsigned char* buf = sh.final();
+    uint8_t* buf = sh.final();
 
     string digest;
 
@@ -34,7 +34,7 @@ std::string genAcceptHeader(string base64, string GUID) {
     return base64::to_base64(digest);
 }
 
-typedef unsigned char byte;
+typedef uint8_t byte;
 typedef unsigned int  uint;
 
 class handshake_handler {
@@ -74,27 +74,62 @@ private:
 	}
 };
 
+#define TEXT_FRAME        0x1
+#define BINARY_FRAME      0x2
+#define CLOSE_CONNECTION  0x8
+#define PING              0x9
+#define PONG              0xA
+
+class InfoMessageFragment {
+private:
+    uint8_t         messageType;
+    vector<uint8_t> data;
+public:
+    InfoMessageFragment() : messageType(0) {
+    }
+
+    InfoMessageFragment(uint8_t messageType, vector<uint8_t> data) : messageType(messageType), data(data) {
+    }
+
+    uint8_t getMessageType() const {
+        return messageType;
+    }
+
+    vector<uint8_t> getData() const {
+        return data;
+    }
+
+    InfoMessageFragment operator+=(InfoMessageFragment& rhs) {
+        for_each(rhs.data.begin(), rhs.data.end(), [&this->data](uint8_t e) {
+            data.push_back(e);
+        });
+
+        this->messageType = max(rhs.messageType, this->messageType);
+        this->FIN         = rhs->FIN;
+    }
+};
+
 class PartialHeader {
 public:
-	unsigned char     opcode;          // opcode..
+	uint8_t           opcode;          // opcode..
 	bool  		      isMask;          // máscara
-	unsigned char     payloadType;     // tipo referente ao tamanho do dado da aplicação
-	unsigned char     FIN;             // usado pra verificar se existem múltiplos frames referente a um mesmo dado
+	uint8_t           payloadType;     // tipo referente ao tamanho do dado da aplicação
+	uint8_t           FIN;             // usado pra verificar se existem múltiplos frames referente a um mesmo dado
 	unsigned long int appDataLen = 0;  // tamanho do dado da aplicação
-	unsigned char  	  mask[4];         // máscara
+	uint8_t  	      mask[4];         // máscara
 	unsigned int   	  headerLen;       // tamanho do header
-	unsigned char  	  maskAddrOffset;  // offset do inicio da máscara nos bytes
-	unsigned char  	  appDataLenBytes; // contém a quantidade de bytes necessários que guardará o tamanho do dado da aplicação
+	uint8_t  	      maskAddrOffset;  // offset do inicio da máscara nos bytes
+	uint8_t  	      appDataLenBytes; // contém a quantidade de bytes necessários que guardará o tamanho do dado da aplicação
 
-	void extractOpcode(vector<unsigned char>& buf) {
+	void extractOpcode(vector<uint8_t>& buf) {
 		this->opcode = buf[0] & 0xF;
 	}
 
-	void extractMaskEnabled(vector<unsigned char>& buf) {
+	void extractMaskEnabled(vector<uint8_t>& buf) {
 		this->isMask = !!(buf[1] & 0x80);
 	}
 
-	void extractPayloadType(vector<unsigned char>& buf) {
+	void extractPayloadType(vector<uint8_t>& buf) {
 		int type = buf[1] & 0x7F;
 
 		if(type < 126) {
@@ -108,12 +143,12 @@ public:
 		payloadType = type;
 	}
 
-	void extractFIN(vector<unsigned char>& buf) {
+	void extractFIN(vector<uint8_t>& buf) {
 		this->FIN = (buf[0] & 0x80) >> 7;
 	}
 
 public:
-	void extractFirstStage(vector<unsigned char>& buf) {
+	void extractFirstStage(vector<uint8_t>& buf) {
 		extractOpcode(buf);
 		extractMaskEnabled(buf);
 		extractPayloadType(buf);
@@ -123,7 +158,7 @@ public:
 		appDataLenBytes = payloadType < 126 ? 0 : payloadType == 126 ? 2 : 8;
 	}
 
-	void extractSecondStage(vector<unsigned char>& buf) {
+	void extractSecondStage(vector<uint8_t>& buf) {
 		// read application data length
 		if(payloadType < 126) {
 			this->appDataLen = buf[1] & 0x7F;
@@ -147,7 +182,7 @@ public:
 	}
 };
 
-void readNBytes(int fd, vector<unsigned char>& buf, int until) {
+void readNBytes(int fd, vector<uint8_t>& buf, int until) {
 	buf.assign(until, 0);
 
 	int readBytes = 0;
@@ -165,7 +200,8 @@ void printHeader(PartialHeader h) {
 }
 
 // buf precisa ser do tamanho exato do pacote
-pair<vector<unsigned char>, bool> parsePacket(int fd, vector<unsigned char>& buf) {
+// ler um frame inteiro
+pair<InfoMessageFragment, bool> parsePacket(int fd, vector<uint8_t>& buf) {
 	PartialHeader header;
 
 	int bufLen = buf.size();
@@ -177,7 +213,7 @@ pair<vector<unsigned char>, bool> parsePacket(int fd, vector<unsigned char>& buf
 
 	header.extractFirstStage(buf);
 
-	vector<unsigned char> bufTemp;
+	vector<uint8_t> bufTemp;
 
     // Tratando o caso onde recebo apenas um pedaço do header mas não ele completamente
 	if(header.payloadType > 0) {
@@ -195,7 +231,7 @@ pair<vector<unsigned char>, bool> parsePacket(int fd, vector<unsigned char>& buf
 				readNBytes(fd, bufTemp, data-restBytes);
 			}
 
-			for_each(bufTemp.begin(), bufTemp.end(), [&buf](unsigned char e) {
+			for_each(bufTemp.begin(), bufTemp.end(), [&buf](uint8_t e) {
 				buf.push_back(e);
 			});
 		}
@@ -208,63 +244,59 @@ pair<vector<unsigned char>, bool> parsePacket(int fd, vector<unsigned char>& buf
 	if(bufLen < header.appDataLen+header.headerLen) {
 		readNBytes(fd, bufTemp, (header.appDataLen+header.headerLen)-bufLen);
 
-		for_each(bufTemp.begin(), bufTemp.end(), [&buf](unsigned char e) {
+		for_each(bufTemp.begin(), bufTemp.end(), [&buf](uint8_t e) {
 			buf.push_back(e);
 		});
 	}
 
 	buf.erase(buf.begin(), buf.begin()+header.headerLen+header.appDataLen);
 
-	vector<unsigned char> data(header.appDataLen);
+	vector<uint8_t> data(header.appDataLen);
+
+    InfoMessageFragment ret;
 
 	for(int i = 0; i < data.size(); i++) {
 		data[i] = buf[header.headerLen+i] ^ header.mask[i%4];
 	}
 
-	return { data, header.FIN };
+    return { InfoMessageFragment(header.opcode, data), header.FIN> }
 }
 
-void sendAll(int fd, unsigned char* buf, size_t n) {
+void sendAll(int fd, uint8_t* buf, size_t n) {
 	unsigned int sent = 0;
 	while(n-sent > 0) {
 		sent += send(fd, buf+sent, n-sent, 0);
 	}
 }
 
-vector<unsigned char> assemblyFrames(int fd, vector<unsigned char>& buf) {
-	vector<unsigned char> result;
+// A saída contém a mensagem completa, e o tipo da mensagem
+InfoMessageFragment getApplicationData(int fd, vector<uint8_t>& buf) {
+    InfoMessageFragment appData;
 
-	pair<vector<unsigned char>, bool> res;
+    do {
+        auto out = parsePacket(fd, buf);
+        appData += out.first;
+    } while(!out.second);
 
-	do {
-		res      = parsePacket(fd, buf);
-		auto aux = res.first;
-
-		for_each(aux.begin(), aux.end(), [&result](unsigned char e) {
-			result.push_back(e);
-		});
-		
-	} while(!res.second);
-
-	return result;
+	return appData;
 }
 
 void clientHandler(int fd) {
     std::cout << "cliente conectado" << std::endl;
 
-	unsigned char rawBuf[8192];
+	uint8_t rawBuf[8192];
 	int len = recv(fd, rawBuf, 8192, 0);
 
 	string response = handshake_handler((char*)rawBuf).getResponseHeader();
 
-	sendAll(fd, (unsigned char*)response.data(), response.size());
+	sendAll(fd, (uint8_t*)response.data(), response.size());
 
-	vector<unsigned char> buf;
+	vector<uint8_t> buf;
 
     for(;;) {
         len = recv(fd, rawBuf, 8192, 0);
 		
-		for_each(begin(rawBuf), begin(rawBuf)+len, [&buf](unsigned char e) {
+		for_each(begin(rawBuf), begin(rawBuf)+len, [&buf](uint8_t e) {
 			buf.push_back(e);
 		});
 
