@@ -2,15 +2,17 @@
 #include <vector>
 #include <functional>
 #include <algorithm>
+#include <memory>
+#include "eventDispatcher.h"
 
 void readUntil(int fd, std::vector<uint8_t>& buf, int until) {
 	buf.assign(until, 0);
 
 	int readBytes = 0;
 
-	while(readBytes < until) {
-		readBytes += recv(fd, buf.data()+readBytes, until-readBytes, 0);
-	}
+	// while(readBytes < until) {
+	// 	readBytes += recv(fd, buf.data()+readBytes, until-readBytes, 0);
+	// }
 }
 
 #define TEXT_FRAME        0x1
@@ -48,20 +50,16 @@ public:
 };
 
 class HeaderWebSocket {
-public:
+private:
 	uint8_t           opcode;          // opcode..
 	bool  		      isMask;          // máscara
 	uint8_t           payloadType;     // tipo referente ao tamanho do dado da aplicação
 	uint8_t           FIN;             // usado pra verificar se existem múltiplos frames referente a um mesmo dado
-	unsigned long int appDataLen;      // tamanho do dado da aplicação
+	uint64_t          appDataLen;      // tamanho do dado da aplicação
 	uint8_t  	      mask[4];         // máscara
-	unsigned int   	  headerLen;       // tamanho do header
+	uint32_t   	      headerLen;       // tamanho do header
 	uint8_t  	      maskAddrOffset;  // offset do inicio da máscara nos bytes
 	uint8_t  	      appDataLenBytes; // contém a quantidade de bytes necessários que guardará o tamanho do dado da aplicação
-
-    HeaderWebSocket() {
-        this->appDataLen = 0;
-    }
 
 	void extractOpcode(std::vector<uint8_t>& buf) {
 		this->opcode = buf[0] & 0xF;
@@ -89,7 +87,6 @@ public:
 		this->FIN = (buf[0] & 0x80) >> 7;
 	}
 
-public:
 	void extractFirstStage(std::vector<uint8_t>& buf) {
 		extractOpcode(buf);
 		extractMaskEnabled(buf);
@@ -119,16 +116,17 @@ public:
 		memcpy(&this->mask, &buf[maskAddrOffset], 4);
 	}
 
-	int getPayloadType() {
-		return this->payloadType;
-	}
+public:
+    std::pair<InfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf);
+
+    HeaderWebSocket() {
+        this->appDataLen = 0;
+    }
 };
 
 // buf precisa ser do tamanho exato do pacote
 // ler um frame inteiro
-std::pair<InfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf) {
-	HeaderWebSocket header;
-
+std::pair<InfoMessageFragment, bool> HeaderWebSocket::getFrame(int fd, std::vector<uint8_t>& buf) {
 	int bufLen = buf.size();
 
 	// tamanho minimo de um pacote no protocolo
@@ -136,21 +134,21 @@ std::pair<InfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf)
 		readUntil(fd, buf, 2-bufLen);
 	}
 
-	header.extractFirstStage(buf);
+	this->extractFirstStage(buf);
 
 	std::vector<uint8_t> bufTemp;
 
-    // Tratando o caso onde recebo apenas um pedaço do header mas não ele completamente
-	if(header.payloadType > 0) {
+    // Tratando o caso onde recebo apenas um pedaço do this->mas não ele completamente
+	if(this->payloadType > 0) {
         int restBytes = bufLen-2;
 
 		// verifico se tenho algum dado pra receber
 		if(restBytes < 4) {
-			int data = header.isMask * 4 + header.appDataLenBytes;
+			int data = this->isMask * 4 + this->appDataLenBytes;
 
-			if(header.payloadType < 126) {
+			if(this->payloadType < 126) {
 				readUntil(fd, bufTemp, data-restBytes);
-			} else if(header.payloadType == 126) {
+			} else if(this->payloadType == 126) {
 				readUntil(fd, bufTemp, data-restBytes);
 			} else {
 				readUntil(fd, bufTemp, data-restBytes);
@@ -162,89 +160,123 @@ std::pair<InfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf)
 		}
 	}
 
-	header.extractSecondStage(buf);
+	this->extractSecondStage(buf);
 
 	bufLen = buf.size();
 
-	if(bufLen < header.appDataLen+header.headerLen) {
-		readUntil(fd, bufTemp, (header.appDataLen+header.headerLen)-bufLen);
+	if(bufLen < this->appDataLen+this->headerLen) {
+		readUntil(fd, bufTemp, (this->appDataLen+this->headerLen)-bufLen);
 
 		for_each(bufTemp.begin(), bufTemp.end(), [&buf](uint8_t e) {
 			buf.push_back(e);
 		});
 	}
 
-	buf.erase(buf.begin(), buf.begin()+header.headerLen+header.appDataLen);
+	buf.erase(buf.begin(), buf.begin()+this->headerLen+this->appDataLen);
 
-	std::vector<uint8_t> data(header.appDataLen);
+	std::vector<uint8_t> data(this->appDataLen);
 
     InfoMessageFragment ret;
 
 	for(int i = 0; i < data.size(); i++) {
-		data[i] = buf[header.headerLen+i] ^ header.mask[i%4];
+		data[i] = buf[this->headerLen+i] ^ this->mask[i%4];
 	}
 
-    return { InfoMessageFragment(header.opcode, data), header.FIN };
+    return { InfoMessageFragment(this->opcode, data), this->FIN };
 }
 
 // A saída contém a mensagem completa, e o tipo da mensagem
 InfoMessageFragment getEntireMessage(int fd, std::vector<uint8_t>& buf) {
     InfoMessageFragment appData;
+    HeaderWebSocket     header;
 
     std::pair<InfoMessageFragment, bool> out;
 
     do {
-        out = getFrame(fd, buf);
+        out = header.getFrame(fd, buf);
         appData += out.first;
     } while(!out.second);
 
 	return appData;
 }
 
+class TextMessageEvent : public Event {
+public:
+    TextMessageEvent(std::string eventType, std::string text) : text(text) {
+        this->eventType = eventType;
+    }
+
+    std::string getText() const {
+        return this->text;
+    }
+private:
+    std::string text;
+};
+
+class BinaryMessageEvent : public Event {
+public:
+    BinaryMessageEvent(std::string eventType, std::vector<uint8_t> data) : data(data) {
+        this->eventType = eventType;
+    }
+
+    std::vector<uint8_t> getData() const {
+        return this->data;
+    }
+private:
+    std::vector<uint8_t> data;
+};
+
 class ws {
 public:
     ws(int32_t fileDescriptor) : fd(fileDescriptor), isRunning(true) {
     }
 
-    void onConnection(std::function<void()> f) {
-        this->connectionCallback = f;
+    void on(std::string eventType, Callback callback) {
+        this->emitter.addListener(eventType, callback);
     }   
-
-    void onMessage(std::function<void(uint8_t)> f) {
-        this->messageCallback = f;
-    }
-
-    void onClose(std::function<void()> f) {
-        this->closeCallback = f;
-    }
 
     void listen() {
         std::vector<uint8_t> buf;
         InfoMessageFragment info;
 
-        connectionCallback();
+        this->emitter.notify("Connection");
 
         while(isRunning) {
             info = getEntireMessage(this->fd, buf);
 
-            if(info.getMessageType() == TEXT_FRAME || info.getMessageType() == BINARY_FRAME) {
+            switch(info.getMessageType()) {
+                case TEXT_FRAME: {
+                    std::shared_ptr<Event> e(new TextMessageEvent("textMessage", "something"));
+                    this->emitter.notify(e.get());
+                    break;
+                }
 
+                case BINARY_FRAME: {
+                    std::shared_ptr<Event> e(new BinaryMessageEvent("binaryMessage", {1, 2, 3, 4, 5}));
+                    this->emitter.notify(e.get());
+                    break;
+                }
 
-            } else if(info.getMessageType() == CLOSE_CONNECTION) {
-                this->isRunning = false;
-                this->closeCallback();
-            } else if(info.getMessageType() == PING) {
+                case CLOSE_CONNECTION: {
 
-            } else if(info.getMessageType() == PONG) {
+                    break;
+                }
 
+                case PING: {
+
+                    break;
+                }
+
+                case PONG: {
+
+                    break;
+                }
             }
         }
     }
 
 private:
-    std::function<void()>        connectionCallback;
-    std::function<void(uint8_t)> messageCallback;
-    std::function<void()>        closeCallback;
-    int32_t fd;
-    bool    isRunning;
+    Dispatcher emitter;
+    int32_t    fd;
+    bool       isRunning;
 };
