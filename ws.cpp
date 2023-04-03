@@ -21,15 +21,15 @@ void readUntil(int fd, std::vector<uint8_t>& buf, int until) {
 #define PING              0x9
 #define PONG              0xA
 
-class InfoMessageFragment {
+class ReceiverInfoMessageFragment {
 private:
     uint8_t               messageType;
     std::vector<uint8_t>  data;
 public:
-    InfoMessageFragment() : messageType(0) {
+    ReceiverInfoMessageFragment() : messageType(0) {
     }
 
-    InfoMessageFragment(uint8_t messageType, std::vector<uint8_t> data) : messageType(messageType), data(data) {
+    ReceiverInfoMessageFragment(uint8_t messageType, std::vector<uint8_t> data) : messageType(messageType), data(data) {
     }
 
     uint8_t getMessageType() const {
@@ -40,7 +40,7 @@ public:
         return data;
     }
 
-    InfoMessageFragment operator+=(InfoMessageFragment& rhs) {
+    ReceiverInfoMessageFragment operator+=(ReceiverInfoMessageFragment& rhs) {
         for_each(rhs.data.begin(), rhs.data.end(), [&](uint8_t e) {
             data.push_back(e);
         });
@@ -49,7 +49,7 @@ public:
     }
 };
 
-class HeaderWebSocket {
+class ReceiverHeaderWebSocket {
 private:
 	uint8_t           opcode;          // opcode..
 	bool  		      isMask;          // máscara
@@ -117,16 +117,34 @@ private:
 	}
 
 public:
-    std::pair<InfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf);
+    std::pair<ReceiverInfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf);
 
-    HeaderWebSocket() {
+    ReceiverHeaderWebSocket() {
         this->appDataLen = 0;
     }
 };
 
+class SenderHeaderWebSocket {
+private:
+    // encodes FIN, RSV1, RSV2, RSV3, Opcode
+    uint8_t  controlBits;
+
+    // encodes MASK and Payload len
+    uint8_t  payloadLen;
+    uint16_t extendedPayloadLen;
+    uint64_t extendedPayloadLenContinued;
+    uint8_t  mask[4];
+    
+    
+
+public:
+
+
+}
+
 // buf precisa ser do tamanho exato do pacote
 // ler um frame inteiro
-std::pair<InfoMessageFragment, bool> HeaderWebSocket::getFrame(int fd, std::vector<uint8_t>& buf) {
+std::pair<ReceiverInfoMessageFragment, bool> ReceiverHeaderWebSocket::getFrame(int fd, std::vector<uint8_t>& buf) {
 	int bufLen = buf.size();
 
 	// tamanho minimo de um pacote no protocolo
@@ -176,21 +194,21 @@ std::pair<InfoMessageFragment, bool> HeaderWebSocket::getFrame(int fd, std::vect
 
 	std::vector<uint8_t> data(this->appDataLen);
 
-    InfoMessageFragment ret;
+    ReceiverInfoMessageFragment ret;
 
 	for(int i = 0; i < data.size(); i++) {
 		data[i] = buf[this->headerLen+i] ^ this->mask[i%4];
 	}
 
-    return { InfoMessageFragment(this->opcode, data), this->FIN };
+    return { ReceiverInfoMessageFragment(this->opcode, data), this->FIN };
 }
 
 // A saída contém a mensagem completa, e o tipo da mensagem
-InfoMessageFragment getEntireMessage(int fd, std::vector<uint8_t>& buf) {
-    InfoMessageFragment appData;
-    HeaderWebSocket     header;
+ReceiverInfoMessageFragment getEntireMessage(int fd, std::vector<uint8_t>& buf) {
+    ReceiverInfoMessageFragment appData;
+    ReceiverHeaderWebSocket     header;
 
-    std::pair<InfoMessageFragment, bool> out;
+    std::pair<ReceiverInfoMessageFragment, bool> out;
 
     do {
         out = header.getFrame(fd, buf);
@@ -237,7 +255,7 @@ public:
 
     void listen() {
         std::vector<uint8_t> buf;
-        InfoMessageFragment info;
+        ReceiverInfoMessageFragment info;
 
         this->emitter.notify("Connection");
 
