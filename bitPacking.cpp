@@ -4,6 +4,15 @@
 
 using namespace std;
 
+void printBits(uint64_t arg, int n) {
+    if(n <= 0) {
+        return;
+    }
+
+    printBits(arg>>1, n-1);
+    printf("%d", (arg&1));
+}
+
 void setBit(uint64_t& src, int8_t pos) {
     src = src | (1LL << pos);
 }
@@ -12,16 +21,14 @@ void clearBit(uint64_t& src, int32_t pos) {
     src = src & ~(1LL << pos);
 }
 
-void bswap(uint64_t src, int32_t nBytes) {
-    // ........abcdef
-    for(int i = 0; i < nBytes; i++) {
-        uint64_t mask = (0xFF << (i*8)) | (0xFF << ((nBytes-1) * 8));
-        // int left  = (0xFF << (i*8));
-        // int right = (0xFF << ((nBytes-1) * 8));
-        // src       = ((src & ~left) | (src & ~right)) | ()
+uint64_t bswap(uint64_t src, int8_t nBytes) {
+    array<nBytes, uint8_t> bytes;
+
+    for(int i = 0; i < nBytes/2; i++) {
+
     }
 
-
+    return src;
 } 
 
 // a b c d e
@@ -79,16 +86,10 @@ private:
     bool      endianess;
 };
 
-void printBits(uint64_t arg, int n) {
-    if(n <= 0) {
-        return;
-    }
-
-    printBits(arg>>1, n-1);
-    printf("%d", (arg&&1));
-}
-
 int main() {
-    printBits(-1, 64);
+    uint16_t a = 0b1111111100000000;
+    // a = bswap(a, 2);
+    // printBits(a, 16);
+    bswap(a, 2);
     return 0;
 }
