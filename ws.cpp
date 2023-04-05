@@ -65,17 +65,6 @@ namespace ws {
         }
     };
 
-
-    void readUntil(int fd, std::vector<uint8_t>& buf, int until) {
-        buf.assign(until, 0);
-
-        int readBytes = 0;
-
-        while(readBytes < until) {
-        	readBytes += recv(fd, buf.data()+readBytes, until-readBytes, 0);
-        }
-    }
-
     #define TEXT_FRAME        0x1
     #define BINARY_FRAME      0x2
     #define CLOSE_CONNECTION  0x8
@@ -112,7 +101,7 @@ namespace ws {
         }
     };
 
-    class ReceiveHandlerPacket {
+    class ReceivePacketHandler {
     private:
         uint8_t           opcode;          // opcode..
         bool  		      isMask;          // máscara
@@ -182,12 +171,12 @@ namespace ws {
     public:
         std::pair<ReceiverInfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf);
 
-        ReceiveHandlerPacket() {
+        ReceivePacketHandler() {
             this->appDataLen = 0;
         }
     };
 
-    class SendHandlerPacket {
+    class SenderPacketHandler {
     private:
         // encodes FIN, RSV1, RSV2, RSV3, Opcode
         uint8_t  controlBits;
@@ -197,6 +186,9 @@ namespace ws {
         uint16_t extendedPayloadLen;
         uint64_t extendedPayloadLenContinued;
         uint8_t  mask[4];
+        
+        
+
     public:
 
 
@@ -204,9 +196,9 @@ namespace ws {
 
     // buf precisa ser do tamanho exato do pacote
     // ler um frame inteiro
-    std::pair<ReceiverInfoMessageFragment, bool> ReceiveHandlerPacket::getFrame(int fd, std::vector<uint8_t>& buf) {
+    std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(int fd, std::vector<uint8_t>& buf) {
         int bufLen = buf.size();
-
+        
         // tamanho minimo de um pacote no protocolo
         if(bufLen < 2) {
             readUntil(fd, buf, 2-bufLen);
@@ -266,7 +258,7 @@ namespace ws {
     // A saída contém a mensagem completa, e o tipo da mensagem
     ReceiverInfoMessageFragment getEntireMessage(int fd, std::vector<uint8_t>& buf) {
         ReceiverInfoMessageFragment appData;
-        ReceiveHandlerPacket     header;
+        ReceivePacketHandler     header;
 
         std::pair<ReceiverInfoMessageFragment, bool> out;
 
