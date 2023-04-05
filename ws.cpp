@@ -187,7 +187,7 @@ namespace ws {
         }
     };
 
-    class SendeHandlerPacket {
+    class SendHandlerPacket {
     private:
         // encodes FIN, RSV1, RSV2, RSV3, Opcode
         uint8_t  controlBits;
@@ -197,9 +197,6 @@ namespace ws {
         uint16_t extendedPayloadLen;
         uint64_t extendedPayloadLenContinued;
         uint8_t  mask[4];
-        
-        
-
     public:
 
 
