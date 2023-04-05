@@ -169,10 +169,11 @@ namespace ws {
         }
 
     public:
-        std::pair<ReceiverInfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf);
+        std::pair<ReceiverInfoMessageFragment, bool> getFrame(int fd, PacketDataHandler& buf);
 
         ReceivePacketHandler() {
             this->appDataLen = 0;
+            memset(this->mask, 0, sizeof(this->mask));
         }
     };
 
@@ -191,79 +192,51 @@ namespace ws {
 
     public:
 
-
     };
 
     // buf precisa ser do tamanho exato do pacote
     // ler um frame inteiro
-    std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(int fd, std::vector<uint8_t>& buf) {
-        int bufLen = buf.size();
+    std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(int fd, PacketDataHandler& buf) {
+        //int bufLen = buf.size();
         
         // tamanho minimo de um pacote no protocolo
-        if(bufLen < 2) {
-            readUntil(fd, buf, 2-bufLen);
-        }
+        readAtLeast(fd, buf, 2);
 
         this->extractFirstStage(buf);
 
-        std::vector<uint8_t> bufTemp;
-
-        // Tratando o caso onde recebo apenas um pedaço do this->mas não ele completamente
+        // Tratando o caso onde recebo apenas um pedaço do pacote mas não ele completamente
+        // 
         if(this->payloadType > 0) {
-            int restBytes = bufLen-2;
+            int32_t packetLen = this->isMask * 4 + this->appDataLenBytes + this->appDataLen;
 
-            // verifico se tenho algum dado pra receber
-            if(restBytes < 4) {
-                int data = this->isMask * 4 + this->appDataLenBytes;
-
-                if(this->payloadType < 126) {
-                    readUntil(fd, bufTemp, data-restBytes);
-                } else if(this->payloadType == 126) {
-                    readUntil(fd, bufTemp, data-restBytes);
-                } else {
-                    readUntil(fd, bufTemp, data-restBytes);
-                }
-
-                for_each(bufTemp.begin(), bufTemp.end(), [&buf](uint8_t e) {
-                    buf.push_back(e);
-                });
-            }
+            // if buf don't contains entire packet, then wait until
+            // buf be filled
+            readUntil(fd, buf, packetLen);
         }
 
         this->extractSecondStage(buf);
 
-        bufLen = buf.size();
-
-        if(bufLen < this->appDataLen+this->headerLen) {
-            readUntil(fd, bufTemp, (this->appDataLen+this->headerLen)-bufLen);
-
-            for_each(bufTemp.begin(), bufTemp.end(), [&buf](uint8_t e) {
-                buf.push_back(e);
-            });
-        }
-
-        buf.erase(buf.begin(), buf.begin()+this->headerLen+this->appDataLen);
-
         std::vector<uint8_t> data(this->appDataLen);
 
-        ReceiverInfoMessageFragment ret;
-
+        // unmasking data
         for(int i = 0; i < data.size(); i++) {
             data[i] = buf[this->headerLen+i] ^ this->mask[i%4];
         }
+
+        buf.clearPrefix(this->headerLen+this->appDataLen);
 
         return { ReceiverInfoMessageFragment(this->opcode, data), this->FIN };
     }
 
     // A saída contém a mensagem completa, e o tipo da mensagem
-    ReceiverInfoMessageFragment getEntireMessage(int fd, std::vector<uint8_t>& buf) {
+    ReceiverInfoMessageFragment getEntireMessage(int fd, PacketDataHandler& buf) {
         ReceiverInfoMessageFragment appData;
-        ReceivePacketHandler     header;
+        ReceivePacketHandler        header;
 
         std::pair<ReceiverInfoMessageFragment, bool> out;
 
         do {
-            out = header.getFrame(fd, buf);
+            out      = header.getFrame(fd, buf);
             appData += out.first;
         } while(!out.second);
 
@@ -299,8 +272,7 @@ namespace ws {
     class ws {
     public:
         ws(int32_t fileDescriptor) : fd(fileDescriptor), isRunning(true) {
-            PacketDataHandler buf;
-            receivePacket(fileDescriptor, buf);
+            receivePacket(fileDescriptor, this->buf);
             HandshakeHandler hs(buf.toString());
             hs.sendHTTPResponse(fileDescriptor);
         }
@@ -310,7 +282,7 @@ namespace ws {
         }   
 
         void listen() {
-            std::vector<uint8_t> buf;
+            this->buf.clear();
             ReceiverInfoMessageFragment info;
 
             this->emitter.notify("Connection");
@@ -332,7 +304,7 @@ namespace ws {
                     }
 
                     case CLOSE_CONNECTION: {
-
+                        // UDP e TCP
                         break;
                     }
 
@@ -350,8 +322,11 @@ namespace ws {
         }
 
     private:
-        Dispatcher emitter;
-        int32_t    fd;
-        bool       isRunning;
+        Dispatcher        emitter;
+        int32_t           fd;
+        bool              isRunning;
+        PacketDataHandler buf
     };
 }
+
+ws.on("Message", callback(Event e));
