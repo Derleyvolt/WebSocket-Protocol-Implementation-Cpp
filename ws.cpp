@@ -3,18 +3,77 @@
 #include <functional>
 #include <algorithm>
 #include <memory>
-#include "eventDispatcher.h"
+#include <map>
+#include <cstring>
+#include "eventDispatcher.hpp"
+#include "IO.hpp"
+#include "SHA1.h"
+#include "base64.hpp"
 
 namespace ws {
+    class HandshakeHandler {
+    public:
+        HandshakeHandler(std::string headers) {
+            // ignora o verbo
+            headers = headers.substr(headers.find('\n')+1);
+
+            // parsa os headers
+            while(headers.size() > 3 && headers.find('\n') != std::string::npos) {
+                std::string cur_line        = headers.substr(0, headers.find('\n')-1);
+                std::string cur_header_type = cur_line.substr(0, cur_line.find(':'));
+                std::string cur_header_info = cur_line.substr(cur_line.find(':')+2);
+
+                this->header[cur_header_type] 	= cur_header_info;
+                headers 	    			    = headers.substr(headers.find('\n')+1);
+            }
+        }
+
+        void sendHTTPResponse(int32_t fp) {
+            std::string response = this->getHTTPResponse();
+            sendAll(fp, (int8_t*)response.data(), response.size());
+        }
+
+        std::string getHeader(std::string h) {
+            return header[h];
+        }
+
+    private:
+        std::map<std::string, std::string> header;
+
+        std::string getSecurityCheck() {
+            return genAcceptHeader(this->header["Sec-WebSocket-Key"], "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+        }
+
+        std::string genAcceptHeader(std::string base64, std::string GUID) {
+            SHA1 sh;
+            sh.update(base64+GUID);
+            uint8_t* buf = sh.final();
+            std::string digest;
+            for(int i = 0; i < 20; i++) {
+                digest.push_back(buf[i]);
+            }
+
+            return base64::to_base64(digest);
+        }
+
+        std::string getHTTPResponse() {
+            std::string res_header = "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: WebSocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: " + this->getSecurityCheck() + "\r\n\r\n";
+            return res_header;
+        }
+    };
+
 
     void readUntil(int fd, std::vector<uint8_t>& buf, int until) {
         buf.assign(until, 0);
 
         int readBytes = 0;
 
-        // while(readBytes < until) {
-        // 	readBytes += recv(fd, buf.data()+readBytes, until-readBytes, 0);
-        // }
+        while(readBytes < until) {
+        	readBytes += recv(fd, buf.data()+readBytes, until-readBytes, 0);
+        }
     }
 
     #define TEXT_FRAME        0x1
@@ -48,10 +107,12 @@ namespace ws {
             });
 
             this->messageType = std::max(rhs.messageType, this->messageType);
+
+            return *this;
         }
     };
 
-    class ReceiverHeaderWebSocket {
+    class ReceiveHandlerPacket {
     private:
         uint8_t           opcode;          // opcode..
         bool  		      isMask;          // máscara
@@ -121,12 +182,12 @@ namespace ws {
     public:
         std::pair<ReceiverInfoMessageFragment, bool> getFrame(int fd, std::vector<uint8_t>& buf);
 
-        ReceiverHeaderWebSocket() {
+        ReceiveHandlerPacket() {
             this->appDataLen = 0;
         }
     };
 
-    class SenderHeaderWebSocket {
+    class SendeHandlerPacket {
     private:
         // encodes FIN, RSV1, RSV2, RSV3, Opcode
         uint8_t  controlBits;
@@ -142,11 +203,11 @@ namespace ws {
     public:
 
 
-    }
+    };
 
     // buf precisa ser do tamanho exato do pacote
     // ler um frame inteiro
-    std::pair<ReceiverInfoMessageFragment, bool> ReceiverHeaderWebSocket::getFrame(int fd, std::vector<uint8_t>& buf) {
+    std::pair<ReceiverInfoMessageFragment, bool> ReceiveHandlerPacket::getFrame(int fd, std::vector<uint8_t>& buf) {
         int bufLen = buf.size();
 
         // tamanho minimo de um pacote no protocolo
@@ -208,7 +269,7 @@ namespace ws {
     // A saída contém a mensagem completa, e o tipo da mensagem
     ReceiverInfoMessageFragment getEntireMessage(int fd, std::vector<uint8_t>& buf) {
         ReceiverInfoMessageFragment appData;
-        ReceiverHeaderWebSocket     header;
+        ReceiveHandlerPacket     header;
 
         std::pair<ReceiverInfoMessageFragment, bool> out;
 
@@ -249,6 +310,10 @@ namespace ws {
     class ws {
     public:
         ws(int32_t fileDescriptor) : fd(fileDescriptor), isRunning(true) {
+            PacketDataHandler buf;
+            receivePacket(fileDescriptor, buf);
+            HandshakeHandler hs(buf.toString());
+            hs.sendHTTPResponse(fileDescriptor);
         }
 
         void on(std::string eventType, Callback callback) {
