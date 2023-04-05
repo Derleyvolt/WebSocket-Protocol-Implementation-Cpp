@@ -53,6 +53,10 @@ public:
         return this->buf.data();
     }
 
+    uint8_t& operator[](uint32_t idx) {
+        return buf[idx];
+    }
+
 private:
     std::vector<uint8_t> buf;
 };
