@@ -210,7 +210,7 @@ namespace ws {
 
         this->extractFirstStage(buf());
 
-        // read rest of header, if still don't readed
+        // read rest of header, if still don't read
         readUntil(fd, buf, this->headerLen);
 
         this->extractSecondStage(buf());
