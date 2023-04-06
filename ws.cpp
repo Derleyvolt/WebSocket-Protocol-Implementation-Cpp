@@ -5,10 +5,12 @@
 #include <memory>
 #include <map>
 #include <cstring>
+#include <thread>
 #include "eventDispatcher.hpp"
 #include "IO.hpp"
 #include "SHA1.h"
 #include "base64.hpp"
+
 
 namespace ws {
     class HandshakeHandler {
@@ -30,6 +32,8 @@ namespace ws {
 
         void sendHTTPResponse(int32_t fp) {
             std::string response = this->getHTTPResponse();
+            std::cout << std::endl << std::endl;
+            std::cout << response << std::endl;
             sendAll(fp, (int8_t*)response.data(), response.size());
         }
 
@@ -86,8 +90,12 @@ namespace ws {
             return messageType;
         }
 
-        std::vector<uint8_t> getData() const {
+        std::vector<uint8_t> getBinaryData() const {
             return data;
+        }
+
+        std::string getTextData() const {
+            return std::string(this->data.begin(), this->data.end());
         }
 
         ReceiverInfoMessageFragment operator+=(ReceiverInfoMessageFragment& rhs) {
@@ -102,7 +110,7 @@ namespace ws {
     };
 
     class ReceivePacketHandler {
-    private:
+    public:
         uint8_t           opcode;          // opcode..
         bool  		      isMask;          // máscara
         uint8_t           payloadType;     // tipo referente ao tamanho do dado da aplicação
@@ -197,24 +205,19 @@ namespace ws {
     // buf precisa ser do tamanho exato do pacote
     // ler um frame inteiro
     std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(int fd, PacketDataHandler& buf) {
-        //int bufLen = buf.size();
-        
         // tamanho minimo de um pacote no protocolo
         readAtLeast(fd, buf, 2);
 
-        this->extractFirstStage(buf);
+        this->extractFirstStage(buf());
 
-        // Tratando o caso onde recebo apenas um pedaço do pacote mas não ele completamente
-        // 
-        if(this->payloadType > 0) {
-            int32_t packetLen = this->isMask * 4 + this->appDataLenBytes + this->appDataLen;
+        // read rest of header, if still don't readed
+        readUntil(fd, buf, this->headerLen);
 
-            // if buf don't contains entire packet, then wait until
-            // buf be filled
-            readUntil(fd, buf, packetLen);
-        }
+        this->extractSecondStage(buf());
 
-        this->extractSecondStage(buf);
+        // if buf don't contains entire packet, then wait until
+        // buf be filled
+        readUntil(fd, buf, this->headerLen + this->appDataLen);
 
         std::vector<uint8_t> data(this->appDataLen);
 
@@ -272,7 +275,7 @@ namespace ws {
     class ws {
     public:
         ws(int32_t fileDescriptor) : fd(fileDescriptor), isRunning(true) {
-            receivePacket(fileDescriptor, this->buf);
+            receivePacket(fileDescriptor, this->buf, 1024);
             HandshakeHandler hs(buf.toString());
             hs.sendHTTPResponse(fileDescriptor);
         }
@@ -292,12 +295,13 @@ namespace ws {
 
                 switch(info.getMessageType()) {
                     case TEXT_FRAME: {
-                        std::shared_ptr<Event> e(new TextMessageEvent("textMessage", "something"));
+                        std::shared_ptr<Event> e(new TextMessageEvent("textMessage", info.getTextData()));
                         this->emitter.notify(e.get());
                         break;
                     }
 
                     case BINARY_FRAME: {
+                        std::cout << "teste" << std::endl;
                         std::shared_ptr<Event> e(new BinaryMessageEvent("binaryMessage", {1, 2, 3, 4, 5}));
                         this->emitter.notify(e.get());
                         break;
@@ -325,8 +329,6 @@ namespace ws {
         Dispatcher        emitter;
         int32_t           fd;
         bool              isRunning;
-        PacketDataHandler buf
+        PacketDataHandler buf;
     };
 }
-
-ws.on("Message", callback(Event e));
