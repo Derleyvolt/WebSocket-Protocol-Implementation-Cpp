@@ -45,11 +45,11 @@ public:
         return std::string(this->buf.begin(), this->buf.end());
     }
 
-    std::vector<uint8_t> getBuffer() {
+    std::vector<uint8_t>& operator()() {
         return this->buf;
     }
 
-    uint8_t *data() {
+    uint8_t* data() {
         return this->buf.data();
     }
 
@@ -57,6 +57,7 @@ public:
         return buf[idx];
     }
 
+	
 private:
     std::vector<uint8_t> buf;
 };
