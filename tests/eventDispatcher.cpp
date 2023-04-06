@@ -1,6 +1,6 @@
-#include "eventDispatcher.h"
+#include "eventDispatcher.hpp"
 
-void Dispatcher::addListener(std::string eventType, Callback callback, double weigth = 0.1) {
+void Dispatcher::addListener(std::string eventType, Callback callback, double weigth) {
     this->listeners.insert({eventType, std::make_pair(callback, weigth)});
 }
 
@@ -20,7 +20,6 @@ void Dispatcher::notify(std::string eventType) {
         func(nullptr);
     }
 }
-
 
 // ordena os listeners por peso
 std::vector<Callback> Dispatcher::orderListeners(std::string eventType) {

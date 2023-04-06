@@ -34,15 +34,19 @@
             let aBuffer = new ArrayBuffer(tam);
             let res     = new Uint8Array(aBuffer);
             
+            // for(var i = 0; i < tam; i++) {
+            //     res[i] = 0xFF & (Math.floor(Math.random() * 1000000));
+            // }
+
             for(var i = 0; i < tam; i++) {
-                res[i] = 0xFF & (Math.floor(Math.random() * 1000000));
+                res[i] = 5;
             }
 
             return res;
         }
 
         $('.btn1').on('click', () => {
-            // let tam = Number($('.campo1').val());
+            let tam = $('.campo1').val();
 
             // let res = generateRandomSequence(tam);
 
@@ -65,7 +69,7 @@
                 }
             ]
 
-            socket.send(JSON.stringify(obj));
+            socket.send(tam);
 
             // res = res.reduce((prev, cur) => {
             //     return prev + cur;

@@ -15,10 +15,10 @@ namespace ws {
     class HandshakeHandler {
     public:
         HandshakeHandler(std::string headers) {
-            // ignora o verbo
+            // ignore verb
             headers = headers.substr(headers.find('\n')+1);
 
-            // parsa os headers
+            // parse headers
             while(headers.size() > 3 && headers.find('\n') != std::string::npos) {
                 std::string cur_line        = headers.substr(0, headers.find('\n')-1);
                 std::string cur_header_type = cur_line.substr(0, cur_line.find(':'));
@@ -31,6 +31,8 @@ namespace ws {
 
         void sendHTTPResponse(int32_t fp) {
             std::string response = this->getHTTPResponse();
+            std::cout << std::endl << std::endl;
+            std::cout << response << std::endl;
             sendAll(fp, (int8_t*)response.data(), response.size());
         }
 
@@ -87,8 +89,12 @@ namespace ws {
             return messageType;
         }
 
-        std::vector<uint8_t> getData() const {
+        std::vector<uint8_t> getBinaryData() const {
             return data;
+        }
+
+        std::string getTextData() const {
+            return std::string(this->data.begin(), this->data.end());
         }
 
         ReceiverInfoMessageFragment operator+=(ReceiverInfoMessageFragment& rhs) {
@@ -103,7 +109,7 @@ namespace ws {
     };
 
     class ReceivePacketHandler {
-    private:
+    public:
         uint8_t           opcode;          // opcode..
         bool  		      isMask;          // máscara
         uint8_t           payloadType;     // tipo referente ao tamanho do dado da aplicação
@@ -111,7 +117,6 @@ namespace ws {
         uint64_t          appDataLen;      // tamanho do dado da aplicação
         uint8_t  	      mask[4];         // máscara
         uint32_t   	      headerLen;       // tamanho do header
-        uint8_t  	      maskAddrOffset;  // offset do inicio da máscara nos bytes
         uint8_t  	      appDataLenBytes; // contém a quantidade de bytes necessários que guardará o tamanho do dado da aplicação
 
         void extractOpcode(std::vector<uint8_t>& buf) {
@@ -123,17 +128,7 @@ namespace ws {
         }
 
         void extractPayloadType(std::vector<uint8_t>& buf) {
-            int type = buf[1] & 0x7F;
-
-            if(type < 126) {
-                maskAddrOffset = 2;
-            } else if(type == 126) {
-                maskAddrOffset = 4;
-            } else {
-                maskAddrOffset = 10;
-            }
-
-            payloadType = type;
+            this->payloadType = buf[1] & 0x7F;
         }
 
         void extractFIN(std::vector<uint8_t>& buf) {
@@ -166,7 +161,7 @@ namespace ws {
                 }
             }
 
-            memcpy(&this->mask, &buf[maskAddrOffset], 4);
+            memcpy(&this->mask, &buf[appDataLenBytes+2], 4);
         }
 
     public:
@@ -189,8 +184,6 @@ namespace ws {
         uint64_t extendedPayloadLenContinued;
         uint8_t  mask[4];
         
-        
-
     public:
 
     };
@@ -198,24 +191,19 @@ namespace ws {
     // buf precisa ser do tamanho exato do pacote
     // ler um frame inteiro
     std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(int fd, PacketDataHandler& buf) {
-        //int bufLen = buf.size();
-        
         // tamanho minimo de um pacote no protocolo
         readAtLeast(fd, buf, 2);
 
         this->extractFirstStage(buf());
 
-        // Tratando o caso onde recebo apenas um pedaço do pacote mas não ele completamente
-        // 
-        if(this->payloadType > 0) {
-            int32_t packetLen = this->isMask * 4 + this->appDataLenBytes + this->appDataLen;
-
-            // if buf don't contains entire packet, then wait until
-            // buf be filled
-            readUntil(fd, buf, packetLen);
-        }
+        // read rest of header, if still don't readed
+        readUntil(fd, buf, this->headerLen);
 
         this->extractSecondStage(buf());
+
+        // if buf don't contains entire packet, then wait until
+        // buf be filled
+        readUntil(fd, buf, this->headerLen + this->appDataLen);
 
         std::vector<uint8_t> data(this->appDataLen);
 
@@ -273,7 +261,7 @@ namespace ws {
     class ws {
     public:
         ws(int32_t fileDescriptor) : fd(fileDescriptor), isRunning(true) {
-            receivePacket(fileDescriptor, this->buf);
+            receivePacket(fileDescriptor, this->buf, 1024);
             HandshakeHandler hs(buf.toString());
             hs.sendHTTPResponse(fileDescriptor);
         }
@@ -293,13 +281,13 @@ namespace ws {
 
                 switch(info.getMessageType()) {
                     case TEXT_FRAME: {
-                        std::shared_ptr<Event> e(new TextMessageEvent("textMessage", "something"));
+                        std::shared_ptr<Event> e(new TextMessageEvent("Text", info.getTextData()));
                         this->emitter.notify(e.get());
                         break;
                     }
 
                     case BINARY_FRAME: {
-                        std::shared_ptr<Event> e(new BinaryMessageEvent("binaryMessage", {1, 2, 3, 4, 5}));
+                        std::shared_ptr<Event> e(new BinaryMessageEvent("Binary", {1, 2, 3, 4, 5}));
                         this->emitter.notify(e.get());
                         break;
                     }
@@ -319,6 +307,8 @@ namespace ws {
                         break;
                     }
                 }
+
+                sleep(1);
             }
         }
 

@@ -30,7 +30,6 @@ public:
 
 private:
     std::unordered_multimap<std::string, listenerPair> listeners;
-
     // ordena os listeners por peso
     std::vector<Callback> orderListeners(std::string eventType);
 };

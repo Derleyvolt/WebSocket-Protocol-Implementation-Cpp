@@ -57,7 +57,13 @@ public:
         return buf[idx];
     }
 
-	
+    void show() {
+        for(auto e : buf) {
+            std::cout << (int)e << " ";
+        }
+        std::cout << std::endl;
+    }
+
 private:
     std::vector<uint8_t> buf;
 };
