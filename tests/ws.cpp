@@ -287,7 +287,7 @@ namespace ws {
                     }
 
                     case BINARY_FRAME: {
-                        std::shared_ptr<Event> e(new BinaryMessageEvent("Binary", {1, 2, 3, 4, 5}));
+                        std::shared_ptr<Event> e(new BinaryMessageEvent("Binary", info.getBinaryData()));
                         this->emitter.notify(e.get());
                         break;
                     }
