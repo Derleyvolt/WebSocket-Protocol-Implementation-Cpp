@@ -188,6 +188,8 @@ namespace ws {
 
     class SenderPacketHandler {
     private:
+        OutputMemoryStream buffer;
+
         // encodes FIN, RSV1, RSV2, RSV3, Opcode
         uint8_t  controlBits;
 
@@ -200,18 +202,11 @@ namespace ws {
         const uint32_t MTU = 1400;
 
         void send(std::vector<uint8_t>& buf, uint8_t messageType, bool FIN, bool mask) {
-            OutputMemoryStream out;
             controlBits = FIN<<7;
             controlBits = controlBits | messageType;
             payloadType = buf.size() <= 125 ? buf.size() : buf.size() > 125 ? 126 : 127;
 
             uint8_t highByte = (uint8_t(mask)<<7) | this->payloadType;
-
-            if(this->payloadType == 126) {
-                this->extendedPayloadLen = this->extendedPayloadLen | (uint16_t)buf.size();
-            } else if(this->payloadType == 127) {
-                this->extendedPayloadLenContinued = this->extendedPayloadLenContinued | (uint64_t)buf.size();
-            }
 
             if(mask) {
                 for(int i = 0; i < 4; i++) {
@@ -223,14 +218,22 @@ namespace ws {
                 }
             }
 
+            buffer.reset();
+            buffer.write(&this->controlBits, 1);
+            buffer.write(&highBytes, 1);
             
+            if(this->payloadType == 126) {
+                this->extendedPayloadLen = this->extendedPayloadLen | (uint16_t)buf.size();
+            } else if(this->payloadType == 127) {
+                this->extendedPayloadLenContinued = this->extendedPayloadLenContinued | (uint64_t)buf.size();
+            }
+
         }   
 
     public:
         SenderPacketHandler() : controlBits(0), payloadLen(0), extendedPayloadLen(0), extendedPayloadLenContinued(0), buffer(32) {
             memset(mask, 0, sizeof(mask));
         }
-
 
         void sendPacket(std::vector<uint8_t>& buf, uint8_t messageType, bool mask = false) {
             if(buf.size() >= MTU) {
