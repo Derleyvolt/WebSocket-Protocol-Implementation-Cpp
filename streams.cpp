@@ -6,7 +6,7 @@ using namespace std;
 class OutputMemoryStream {
 public:
     OutputMemoryStream(): buffer(nullptr), length(0), capacity(0) {
-        reallocBuffer(32);
+        reallocBuffer(64);
     }
 
     ~OutputMemoryStream() {
@@ -30,6 +30,10 @@ public:
 
     void write(int32_t inData) {
         write(&inData, sizeof(inData));
+    }
+
+    void reset() {
+        this->length = 0;
     }
 private:
     void      reallocBuffer(uint32_t newLength);
@@ -64,7 +68,6 @@ void OutputMemoryStream::write(const void* src, size_t byteCount) {
 class InputMemoryStream {
 public:
     InputMemoryStream(char* buffer, uint8_t byteCount) : capacity(byteCount), length(0)  {
-
     }
 
     ~InputMemoryStream() {
