@@ -1,7 +1,4 @@
 #include <iostream>
-#include <vector>
-#include <memory>
-#include <bitset>
 
 using namespace std;
 
@@ -14,109 +11,37 @@ void printBits(uint64_t arg, int n) {
     printf("%d", (arg&1));
 }
 
-void setBit(uint64_t& src, int8_t pos) {
-    src = src | (1LL << pos);
+uint16_t byteSwap2(uint16_t data) {
+    return (data >> 8) | (data << 8);
 }
 
-void clearBit(uint64_t& src, int32_t pos) {
-    src = src & ~(1LL << pos);
+uint32_t byteSwap4(uint32_t data) {
+    return  ((data >> 24) & 0x000000ff) |
+            ((data >> 8) & 0x0000ff00)  |
+            ((data << 8) & 0x00ff0000)  |
+            ((data << 24) & 0xff000000);
 }
 
-void swap(uint8_t& a, uint8_t& b) {
-    uint8_t aux = a;
-    a = b;
-    b = aux;
-}
-
-uint16_t bswap(uint16_t src) {
-    uint8_t* bytes = (uint8_t*)&src;
-    int32_t n      = sizeof(uint16_t);
-
-    for(int i = 0; i < n/2; i++) {
-        swap(bytes[i], bytes[n-1-i]);
-    }
-
-    return *(uint16_t*)bytes;
-}
-
-uint32_t bswap(uint32_t src) {
-    uint8_t* bytes = (uint8_t*)&src;
-    int32_t n      = sizeof(uint32_t);
-
-    for(int i = 0; i < n/2; i++) {
-        swap(bytes[i], bytes[n-1-i]);
-    }
-
-    return *(uint32_t*)bytes;
-}
-
-uint64_t bswap(uint64_t src) {
-    uint8_t* bytes = (uint8_t*)&src;
-    int32_t n      = sizeof(uint64_t);
-
-    for(int i = 0; i < n/2; i++) {
-        swap(bytes[i], bytes[n-1-i]);
-    }
-
-    return *(uint64_t*)bytes;
+uint64_t byteSwap8(uint64_t data) {
+    return  ((data >> 56) & 0x00000000000000ff)  |
+            ((data >> 40) & 0x000000000000ff00)  |
+            ((data >> 24) & 0x0000000000ff0000)  |
+            ((data >> 8)  & 0x00000000ff000000)  |
+            ((data << 8)  & 0x000000ff00000000)  |
+            ((data << 24) & 0x0000ff0000000000)  |
+            ((data << 40) & 0x00ff000000000000)  |
+            ((data << 56) & 0xff00000000000000);
 } 
 
-class Buffer {
-public:
-    Buffer(int32_t size) : size(size), index(0) {
-        data = new uint8_t[this->size];
-    }
-
-    void writeUint8(uint8_t arg) {
-
-    }
-
-    void writeUint16(uint16_t arg) {
-
-    }
-
-    void writeUInt32(uint32_t arg) {
-
-    }
-
-    void writeUint64(uint64_t arg) {
-
-    }
-
-    uint8_t readUint8() {
-        return 1;
-    }
-
-    uint16_t readUint16() {
-        return 1;
-    }
-
-    uint32_t readUint32() {
-        return 1;
-    }
-
-    uint64_t readUInt64() {
-        return 1;
-    }
-
-private:
-    bool endianess() {
-        this->isMachineLittleEndian = 1&1 == 1 ? 1 : 0;
-    }
-
-    uint8_t*  data;
-    int32_t   size;
-    uint32_t  index;
-    bool      isMachineLittleEndian;
-};
+bool isLittleEndian() {
+    uint16_t word(1);
+    return *(uint8_t*)&word;
+}
 
 int main() {
-    uint16_t x = 1;
-    // x = bswap(x);
-    printBits(x, 16);
-    cout << endl;
-    int p = (*(uint8_t*)&x);
-    cout << p << endl;
-    // cout << (bswap(uint32_t(1))&1) << endl;
+    uint16_t a = 0b1111111100000000;
+    // a = bswap(a, 2);
+    // printBits(a, 16);
+    bswap(a, 2);
     return 0;
 }
