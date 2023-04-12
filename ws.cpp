@@ -6,11 +6,11 @@
 #include <map>
 #include <cstring>
 #include <thread>
-#include "eventDispatcher.hpp"
 #include "IO.hpp"
 #include "SHA1.h"
 #include "base64.hpp"
-
+#include "eventDispatcher.hpp"
+#include "bitPacking.cpp"
 
 namespace ws {
     class HandshakeHandler {
@@ -195,11 +195,32 @@ namespace ws {
         uint16_t extendedPayloadLen;
         uint64_t extendedPayloadLenContinued;
         uint8_t  mask[4];
-        
-        
+
+        const uint32_t MTU = 1400;
+
+        void send(std::vector<uint8_t>& buf, uint8_t messageType, bool FIN) {
+            controlBits = FIN<<7;
+            controlBits = controlBits | messageType;
+            payloadLen  = buf.size() <= 125 ? buf.size() : buf.size() > 125 ? 126 : 127;
+
+            if(isLittleEndian()) {
+                
+            }
+        }   
 
     public:
+        SenderPacketHandler() : controlBits(0), payloadLen(0), extendedPayloadLen(0), extendedPayloadLenContinued(0) {
+            memset(mask, 0, sizeof(mask));
+        }
 
+
+        void sendPacket(std::vector<uint8_t>& buf, uint8_t messageType) {
+            if(buf.size() >= MTU) {
+                
+            } else {
+
+            }
+        }
     };
 
     // buf precisa ser do tamanho exato do pacote
