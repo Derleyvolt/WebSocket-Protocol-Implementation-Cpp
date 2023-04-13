@@ -188,6 +188,9 @@ namespace ws {
 
     class SenderPacketHandler {
     private:
+        int32_t fd;
+		
+        // store data
         OutputMemoryStream buffer;
 
         // encodes FIN, RSV1, RSV2, RSV3, Opcode
@@ -201,46 +204,69 @@ namespace ws {
 
         const uint32_t MTU = 1400;
 
-        void send(std::vector<uint8_t>& buf, uint8_t messageType, bool FIN, bool mask) {
+        void send(uint8_t* data, int32_t len, uint8_t messageType, bool FIN, bool mask) {
+            buffer.reset();
+
             controlBits = FIN<<7;
             controlBits = controlBits | messageType;
-            payloadType = buf.size() <= 125 ? buf.size() : buf.size() > 125 ? 126 : 127;
+            payloadType = len <= 125 ? len : len <= 65535 ? 126 : 127;
 
             uint8_t highByte = (uint8_t(mask)<<7) | this->payloadType;
+
+            buffer.write(&this->controlBits, 1);
+            buffer.write(&highByte, 1);
+            
+            if(this->payloadType == 126) {
+                this->extendedPayloadLen |= (uint16_t)len;
+                // network byte order
+                if(isLittleEndian()) byteSwap2(this->extendedPayloadLen);
+                buffer.write(&this->extendedPayloadLen, 2);
+            } else if(this->payloadType == 127) {
+                this->extendedPayloadLenContinued |= (uint64_t)len;
+                // network byte order
+                if(isLittleEndian()) byteSwap8(this->extendedPayloadLenContinued);
+                buffer.write(&this->extendedPayloadLenContinued, 8);
+            }
 
             if(mask) {
                 for(int i = 0; i < 4; i++) {
                     mask[i] = rand() % 256;
                 }
 
-                for(int i = 0; i < buf.size(); i++) {
-                    buf[i] = buf[i] ^ mask[i % 4];
+                for(int i = 0; i < len; i++) {
+                    data[i] = data[i] ^ mask[i % 4];
                 }
+
+                buffer.write(this->mask, 4);
             }
 
-            buffer.reset();
-            buffer.write(&this->controlBits, 1);
-            buffer.write(&highBytes, 1);
-            
-            if(this->payloadType == 126) {
-                this->extendedPayloadLen = this->extendedPayloadLen | (uint16_t)buf.size();
-            } else if(this->payloadType == 127) {
-                this->extendedPayloadLenContinued = this->extendedPayloadLenContinued | (uint64_t)buf.size();
-            }
-
-        }   
+            buffer.write(buf, len);
+            sendAll(this->fd, buffer.getBufferPtr(), len);
+        } 
 
     public:
-        SenderPacketHandler() : controlBits(0), payloadLen(0), extendedPayloadLen(0), extendedPayloadLenContinued(0), buffer(32) {
+        SenderPacketHandler(int32_t fileDescriptor) : controlBits(0), extendedPayloadLen(0), extendedPayloadLenContinued(0), buffer(32) {
             memset(mask, 0, sizeof(mask));
+            this->fd = fileDescriptor;
         }
 
-        void sendPacket(std::vector<uint8_t>& buf, uint8_t messageType, bool mask = false) {
-            if(buf.size() >= MTU) {
-                
-            } else {
-
+        void sendMessage(std::vector<uint8_t>& buf, uint8_t messageType = BINARY_FRAME, bool mask = false) {
+            int32_t len = buf.size();
+            for(int i = 0; i < buf.size(); i += MTU) {
+                this->send(buf.data()+i, min(MTU, len-i), messageType, MTU >= len-i, mask);
             }
+        }
+
+        void ping(std::vector<uint8_t>& buf, bool mask = false) {
+            sendPacket(buf, PING, mask);
+        }
+
+        void pong(std::vector<uint8_t>& buf, bool mask = false) {
+            sendPacket(buf, PONG, mask);
+        }
+
+        void closeConnection(std::vector<uint8_t>& buf, bool mask = false) {
+            sendPacket(buf, CLOSE_CONNECTION, mask);
         }
     };
 
@@ -350,7 +376,7 @@ namespace ws {
                     }
 
                     case CLOSE_CONNECTION: {
-                        // UDP e TCP
+                        
                         break;
                     }
 
