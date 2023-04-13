@@ -54,6 +54,7 @@ namespace ws {
             sh.update(base64+GUID);
             uint8_t* buf = sh.final();
             std::string digest;
+
             for(int i = 0; i < 20; i++) {
                 digest.push_back(buf[i]);
             }
@@ -111,7 +112,8 @@ namespace ws {
     };
 
     class ReceivePacketHandler {
-    public:
+    private:
+        int32_t           fd;
         uint8_t           opcode;          // opcode..
         bool  		      isMask;          // máscara
         uint8_t           payloadType;     // tipo referente ao tamanho do dado da aplicação
@@ -177,10 +179,11 @@ namespace ws {
             memcpy(&this->mask, &buf[maskAddrOffset], 4);
         }
 
+        std::pair<ReceiverInfoMessageFragment, bool> getFrame(PacketDataHandler& buf);
     public:
-        std::pair<ReceiverInfoMessageFragment, bool> getFrame(int fd, PacketDataHandler& buf);
+        ReceiverInfoMessageFragment message(PacketDataHandler& buf);
 
-        ReceivePacketHandler() {
+        ReceivePacketHandler(int32_t fileDescriptor) : fd(fileDescriptor) {
             this->appDataLen = 0;
             memset(this->mask, 0, sizeof(this->mask));
         }
@@ -242,7 +245,7 @@ namespace ws {
 
             buffer.write(buf, len);
             sendAll(this->fd, buffer.getBufferPtr(), len);
-        } 
+        }
 
     public:
         SenderPacketHandler(int32_t fileDescriptor) : controlBits(0), extendedPayloadLen(0), extendedPayloadLenContinued(0), buffer(32) {
@@ -250,7 +253,7 @@ namespace ws {
             this->fd = fileDescriptor;
         }
 
-        void sendMessage(std::vector<uint8_t>& buf, uint8_t messageType = BINARY_FRAME, bool mask = false) {
+        void message(std::vector<uint8_t>& buf, uint8_t messageType = BINARY_FRAME, bool mask = false) {
             int32_t len = buf.size();
             for(int i = 0; i < buf.size(); i += MTU) {
                 this->send(buf.data()+i, min(MTU, len-i), messageType, MTU >= len-i, mask);
@@ -272,20 +275,20 @@ namespace ws {
 
     // buf precisa ser do tamanho exato do pacote
     // ler um frame inteiro
-    std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(int fd, PacketDataHandler& buf) {
+    std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(PacketDataHandler& buf) {
         // tamanho minimo de um pacote no protocolo
-        readAtLeast(fd, buf, 2);
+        readAtLeast(this->fd, buf, 2);
 
         this->extractFirstStage(buf());
 
         // read rest of header, if still don't read
-        readUntil(fd, buf, this->headerLen);
+        readUntil(this->fd, buf, this->headerLen);
 
         this->extractSecondStage(buf());
 
         // if buf don't contains entire packet, then wait until
         // buf be filled
-        readUntil(fd, buf, this->headerLen + this->appDataLen);
+        readUntil(this->fd, buf, this->headerLen + this->appDataLen);
 
         std::vector<uint8_t> data(this->appDataLen);
 
@@ -300,14 +303,14 @@ namespace ws {
     }
 
     // A saída contém a mensagem completa, e o tipo da mensagem
-    ReceiverInfoMessageFragment getEntireMessage(int fd, PacketDataHandler& buf) {
+    ReceiverInfoMessageFragment ReceiverPacketHandler::message(PacketDataHandler& buf) {
         ReceiverInfoMessageFragment appData;
         ReceivePacketHandler        header;
 
         std::pair<ReceiverInfoMessageFragment, bool> out;
 
         do {
-            out      = header.getFrame(fd, buf);
+            out      = header.getFrame(buf);
             appData += out.first;
         } while(!out.second);
 
@@ -350,16 +353,17 @@ namespace ws {
 
         void on(std::string eventType, Callback callback) {
             this->emitter.addListener(eventType, callback);
-        }   
+        }
 
         void listen() {
             this->buf.clear();
+            ReceivePacketHandler        receiver;
             ReceiverInfoMessageFragment info;
 
             this->emitter.notify("Connection");
 
             while(isRunning) {
-                info = getEntireMessage(this->fd, buf);
+                info = receiver.message(this->fd, buf);
 
                 switch(info.getMessageType()) {
                     case TEXT_FRAME: {
@@ -369,7 +373,6 @@ namespace ws {
                     }
 
                     case BINARY_FRAME: {
-                        std::cout << "teste" << std::endl;
                         std::shared_ptr<Event> e(new BinaryMessageEvent("binaryMessage", {1, 2, 3, 4, 5}));
                         this->emitter.notify(e.get());
                         break;
