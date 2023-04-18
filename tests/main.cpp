@@ -2,13 +2,28 @@
 
 #define PORT 8023
 
+void action(Event* e) {
+    ws::TextMessageEvent* tEvent = (ws::TextMessageEvent*)e;
+
+    std::cout << tEvent->getText() << std::endl;
+
+    unsigned long long sum = 0;
+
+    vector<uint8_t> msg;
+
+    // test
+    for(int i = 0; i < 100600; i++) {
+        msg.push_back(i+1);
+        sum = (sum + ((i+1) % 256)) % 10000007;
+    }
+
+    tEvent->sender.message(msg, BINARY_FRAME);
+}
+
 void clientHandler(int32_t fd) {
     ws::ws conn(fd);
 
-    conn.on("Text", [](Event* e) {
-        ws::TextMessageEvent* ev = (ws::TextMessageEvent*)e;
-        std::cout << ev->getText() << std::endl;
-    });
+    conn.on("Text", action);
 
     conn.listen();
 }

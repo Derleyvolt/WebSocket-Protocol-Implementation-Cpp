@@ -6,19 +6,22 @@
 #include <map>
 #include <cstring>
 #include <thread>
-#include "eventDispatcher.hpp"
 #include "IO.hpp"
 #include "SHA1.h"
 #include "base64.hpp"
+#include "eventDispatcher.hpp"
+#include "bitPacking.cpp"
+#include "streams.cpp"
+#include "../debug.cpp"
 
 namespace ws {
     class HandshakeHandler {
     public:
         HandshakeHandler(std::string headers) {
-            // ignore verb
+            // ignora o verbo
             headers = headers.substr(headers.find('\n')+1);
 
-            // parse headers
+            // parsa os headers
             while(headers.size() > 3 && headers.find('\n') != std::string::npos) {
                 std::string cur_line        = headers.substr(0, headers.find('\n')-1);
                 std::string cur_header_type = cur_line.substr(0, cur_line.find(':'));
@@ -31,8 +34,8 @@ namespace ws {
 
         void sendHTTPResponse(int32_t fp) {
             std::string response = this->getHTTPResponse();
-            std::cout << std::endl << std::endl;
-            std::cout << response << std::endl;
+            // std::cout << std::endl << std::endl;
+            // std::cout << response << std::endl;
             sendAll(fp, (int8_t*)response.data(), response.size());
         }
 
@@ -52,6 +55,7 @@ namespace ws {
             sh.update(base64+GUID);
             uint8_t* buf = sh.final();
             std::string digest;
+
             for(int i = 0; i < 20; i++) {
                 digest.push_back(buf[i]);
             }
@@ -109,7 +113,8 @@ namespace ws {
     };
 
     class ReceivePacketHandler {
-    public:
+    private:
+        int32_t           fd;
         uint8_t           opcode;          // opcode..
         bool  		      isMask;          // máscara
         uint8_t           payloadType;     // tipo referente ao tamanho do dado da aplicação
@@ -117,6 +122,7 @@ namespace ws {
         uint64_t          appDataLen;      // tamanho do dado da aplicação
         uint8_t  	      mask[4];         // máscara
         uint32_t   	      headerLen;       // tamanho do header
+        uint8_t  	      maskAddrOffset;  // offset do inicio da máscara nos bytes
         uint8_t  	      appDataLenBytes; // contém a quantidade de bytes necessários que guardará o tamanho do dado da aplicação
 
         void extractOpcode(std::vector<uint8_t>& buf) {
@@ -128,7 +134,17 @@ namespace ws {
         }
 
         void extractPayloadType(std::vector<uint8_t>& buf) {
-            this->payloadType = buf[1] & 0x7F;
+            int type = buf[1] & 0x7F;
+
+            if(type < 126) {
+                maskAddrOffset = 2;
+            } else if(type == 126) {
+                maskAddrOffset = 4;
+            } else {
+                maskAddrOffset = 10;
+            }
+
+            payloadType = type;
         }
 
         void extractFIN(std::vector<uint8_t>& buf) {
@@ -161,13 +177,14 @@ namespace ws {
                 }
             }
 
-            memcpy(&this->mask, &buf[appDataLenBytes+2], 4);
+            memcpy(&this->mask, &buf[maskAddrOffset], 4);
         }
 
+        std::pair<ReceiverInfoMessageFragment, bool> getFrame(PacketDataHandler& buf);
     public:
-        std::pair<ReceiverInfoMessageFragment, bool> getFrame(int fd, PacketDataHandler& buf);
+        ReceiverInfoMessageFragment message(PacketDataHandler& buf);
 
-        ReceivePacketHandler() {
+        ReceivePacketHandler(int32_t fileDescriptor) : fd(fileDescriptor) {
             this->appDataLen = 0;
             memset(this->mask, 0, sizeof(this->mask));
         }
@@ -175,35 +192,121 @@ namespace ws {
 
     class SenderPacketHandler {
     private:
+        int32_t fd;
+		
+        // store data
+        OutputMemoryStream buffer;
+
         // encodes FIN, RSV1, RSV2, RSV3, Opcode
         uint8_t  controlBits;
 
         // encodes MASK and Payload len
-        uint8_t  payloadLen;
+        uint8_t  payloadType;
         uint16_t extendedPayloadLen;
         uint64_t extendedPayloadLenContinued;
         uint8_t  mask[4];
-        
-    public:
+        bool     firstFragmentSent;
 
+        const int32_t MTU = 1400;
+
+        void send(uint8_t* data, int32_t len, uint8_t messageType, bool FIN, bool mask) {
+            buffer.reset();
+            this->extendedPayloadLen = 0;
+            this->extendedPayloadLenContinued = 0;
+            controlBits = FIN<<7;
+            controlBits = controlBits | (messageType>>(8*firstFragmentSent));
+            payloadType = len <= 125 ? len : len <= 65535 ? 126 : 127;
+
+            uint8_t highByte = (uint8_t(mask)<<7) | this->payloadType;
+
+            buffer.write(&this->controlBits, 1);
+            buffer.write(&highByte, 1);
+            
+            if(this->payloadType == 126) {
+                this->extendedPayloadLen |= (uint16_t)len;
+
+                // cout << "tamanho: " << this->extendedPayloadLen << endl;
+                // network byte order
+                if(isLittleEndian()) {
+                    this->extendedPayloadLen = byteSwap2(this->extendedPayloadLen);
+                }
+                buffer.write(&this->extendedPayloadLen, 2);
+            } else if(this->payloadType == 127) {
+                this->extendedPayloadLenContinued |= (uint64_t)len;
+                // network byte order
+                if(isLittleEndian()) {
+                    this->extendedPayloadLenContinued = byteSwap8(this->extendedPayloadLenContinued);
+                }
+                buffer.write(&this->extendedPayloadLenContinued, 8);
+            }
+
+            if(mask) {
+                for(int i = 0; i < 4; i++) {
+                    this->mask[i] = rand() % 256;
+                }
+
+                for(int i = 0; i < len; i++) {
+                    data[i] = data[i] ^ this->mask[i % 4];
+                }
+
+                buffer.write(this->mask, 4);
+            }
+
+            buffer.write(data, len);
+
+            // for(int i = 0; i < buffer.getLength(); i++) {
+            //     cout << (int)buffer.getBufferPtr()[i] << " ";
+            // }
+
+            // cout << endl;
+
+            sendAll(this->fd, (int8_t*)buffer.getBufferPtr(), buffer.getLength());
+        }
+
+    public:
+        SenderPacketHandler(int32_t fileDescriptor) : controlBits(0), extendedPayloadLen(0), extendedPayloadLenContinued(0) {
+            memset(mask, 0, sizeof(mask));
+            this->fd = fileDescriptor;
+        }
+
+        void message(std::vector<uint8_t>& buf, uint8_t messageType = BINARY_FRAME, bool mask = false) {
+            int32_t len = buf.size();
+            this->firstFragmentSent = false;
+            for(int i = 0; i < buf.size(); i += MTU) {
+                this->send(buf.data()+i, min(MTU, len-i), messageType, MTU >= len-i, mask);
+                this->firstFragmentSent = true;
+            }
+        }
+
+        void ping(std::vector<uint8_t>& buf, bool mask = false) {
+            message(buf, PING, mask);
+        }
+
+        void pong(std::vector<uint8_t>& buf, bool mask = false) {
+            message(buf, PONG, mask);
+        }
+
+        void closeConnection(std::vector<uint8_t>& buf, bool mask = false) {
+            message(buf, CLOSE_CONNECTION, mask);
+        }
     };
 
     // buf precisa ser do tamanho exato do pacote
     // ler um frame inteiro
-    std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(int fd, PacketDataHandler& buf) {
+    std::pair<ReceiverInfoMessageFragment, bool> ReceivePacketHandler::getFrame(PacketDataHandler& buf) {
         // tamanho minimo de um pacote no protocolo
-        readAtLeast(fd, buf, 2);
+        readAtLeast(this->fd, buf, 2);
 
         this->extractFirstStage(buf());
 
-        // read rest of header, if still don't readed
-        readUntil(fd, buf, this->headerLen);
+        // read rest of header, if still don't read
+        readUntil(this->fd, buf, this->headerLen);
 
         this->extractSecondStage(buf());
 
         // if buf don't contains entire packet, then wait until
         // buf be filled
-        readUntil(fd, buf, this->headerLen + this->appDataLen);
+        readUntil(this->fd, buf, this->headerLen + this->appDataLen);
 
         std::vector<uint8_t> data(this->appDataLen);
 
@@ -218,14 +321,13 @@ namespace ws {
     }
 
     // A saída contém a mensagem completa, e o tipo da mensagem
-    ReceiverInfoMessageFragment getEntireMessage(int fd, PacketDataHandler& buf) {
+    ReceiverInfoMessageFragment ReceivePacketHandler::message(PacketDataHandler& buf) {
         ReceiverInfoMessageFragment appData;
-        ReceivePacketHandler        header;
 
         std::pair<ReceiverInfoMessageFragment, bool> out;
 
         do {
-            out      = header.getFrame(fd, buf);
+            out      = this->getFrame(buf);
             appData += out.first;
         } while(!out.second);
 
@@ -234,33 +336,38 @@ namespace ws {
 
     class TextMessageEvent : public Event {
     public:
-        TextMessageEvent(std::string eventType, std::string text) : text(text) {
+        TextMessageEvent(std::string eventType, std::string text, SenderPacketHandler& sender) : text(text), sender(sender) {
             this->eventType = eventType;
         }
 
         std::string getText() const {
             return this->text;
         }
+
+
+        SenderPacketHandler& sender;
     private:
         std::string text;
     };
 
     class BinaryMessageEvent : public Event {
     public:
-        BinaryMessageEvent(std::string eventType, std::vector<uint8_t> data) : data(data) {
+        BinaryMessageEvent(std::string eventType, std::vector<uint8_t> data, SenderPacketHandler& sender) : data(data) , sender(sender) {
             this->eventType = eventType;
         }
 
         std::vector<uint8_t> getData() const {
             return this->data;
         }
+
+        SenderPacketHandler& sender;
     private:
         std::vector<uint8_t> data;
     };
 
     class ws {
     public:
-        ws(int32_t fileDescriptor) : fd(fileDescriptor), isRunning(true) {
+        ws(int32_t fileDescriptor) : fd(fileDescriptor), isRunning(true), sender(fileDescriptor) {
             receivePacket(fileDescriptor, this->buf, 1024);
             HandshakeHandler hs(buf.toString());
             hs.sendHTTPResponse(fileDescriptor);
@@ -268,32 +375,33 @@ namespace ws {
 
         void on(std::string eventType, Callback callback) {
             this->emitter.addListener(eventType, callback);
-        }   
+        }
 
         void listen() {
             this->buf.clear();
+            ReceivePacketHandler        receiver(fd);
             ReceiverInfoMessageFragment info;
 
             this->emitter.notify("Connection");
 
             while(isRunning) {
-                info = getEntireMessage(this->fd, buf);
+                info = receiver.message(buf);
 
                 switch(info.getMessageType()) {
                     case TEXT_FRAME: {
-                        std::shared_ptr<Event> e(new TextMessageEvent("Text", info.getTextData()));
+                        std::shared_ptr<Event> e(new TextMessageEvent("Text", info.getTextData(), sender));
                         this->emitter.notify(e.get());
                         break;
                     }
 
                     case BINARY_FRAME: {
-                        std::shared_ptr<Event> e(new BinaryMessageEvent("Binary", info.getBinaryData()));
+                        std::shared_ptr<Event> e(new BinaryMessageEvent("Binary", {1, 2, 3, 4, 5}, sender));
                         this->emitter.notify(e.get());
                         break;
                     }
 
                     case CLOSE_CONNECTION: {
-                        // UDP e TCP
+                        
                         break;
                     }
 
@@ -307,8 +415,6 @@ namespace ws {
                         break;
                     }
                 }
-
-                sleep(1);
             }
         }
 
@@ -317,5 +423,6 @@ namespace ws {
         int32_t           fd;
         bool              isRunning;
         PacketDataHandler buf;
+        SenderPacketHandler sender;
     };
 }

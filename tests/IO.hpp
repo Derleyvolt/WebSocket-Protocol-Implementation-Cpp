@@ -101,5 +101,6 @@ void sendAll(int32_t fd, int8_t *buf, int bCount) {
     int32_t sent = 0;
     while (sent < bCount) {
         sent += send(fd, buf + sent, bCount - sent, 0);
+        std::cout << "sent: " << sent << " bytes\n";
     }
 }

@@ -45,6 +45,10 @@
             return res;
         }
 
+        const isValid = (lista) => {
+            
+        }
+
         $('.btn1').on('click', () => {
             let tam = $('.campo1').val();
 
@@ -78,9 +82,20 @@
             // document.getElementById("lb").innerHTML = res;
         })
 
-        socket.onmessage = function(event) {
-            $('.texto').val(event.data);
-            alert(`[message] Data received from server: ${event.data}`);
+        socket.onmessage = async function(event) {
+            alert(`[message] Data received from server`);
+
+            let buf = await event.data.arrayBuffer();
+            
+            let viewUInt8 = new Uint8Array(buf);
+
+            let sum = 0;
+
+            for(var i of viewUInt8) {
+                sum = (sum + i) % 10000007;
+            }
+
+            alert(`[message] Data received from server: ${sum}`);
         };
     </script>
 </body>
